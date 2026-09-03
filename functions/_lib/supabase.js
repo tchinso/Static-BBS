@@ -5,8 +5,9 @@ function requiredString(value) {
 export function supabaseConfig(env) {
   const url = requiredString(env.SUPABASE_URL).replace(/\/+$/, '');
   const serviceRoleKey = requiredString(env.SUPABASE_SERVICE_ROLE_KEY);
-  if (!url || !serviceRoleKey) throw new Error('Server configuration is missing.');
-  return { url, serviceRoleKey };
+  const publishableKey = requiredString(env.SUPABASE_PUBLISHABLE_KEY);
+  if (!url || !serviceRoleKey || !publishableKey) throw new Error('Server configuration is missing.');
+  return { url, serviceRoleKey, publishableKey };
 }
 
 export function normalizeEmail(value) {
@@ -42,8 +43,17 @@ export function serviceHeaders(env, extraHeaders = undefined) {
   return headers;
 }
 
+export function authHeaders(env, extraHeaders = undefined) {
+  const { publishableKey } = supabaseConfig(env);
+  const headers = new Headers(extraHeaders);
+  // A user JWT must be paired with the project's publishable key. Keep this
+  // key in a Pages secret too, so the browser never receives Supabase config.
+  headers.set('apikey', publishableKey);
+  return headers;
+}
+
 export function userHeaders(env, accessToken, extraHeaders = undefined) {
-  const headers = serviceHeaders(env, extraHeaders);
+  const headers = authHeaders(env, extraHeaders);
   headers.set('Authorization', `Bearer ${accessToken}`);
   return headers;
 }
@@ -51,7 +61,9 @@ export function userHeaders(env, accessToken, extraHeaders = undefined) {
 export async function supabaseJson(env, path, options = {}) {
   const headers = options.accessToken
     ? userHeaders(env, options.accessToken, options.headers)
-    : serviceHeaders(env, options.headers);
+    : options.auth
+      ? authHeaders(env, options.headers)
+      : serviceHeaders(env, options.headers);
   if (options.body !== undefined && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
@@ -75,7 +87,9 @@ export async function supabaseJson(env, path, options = {}) {
 export async function supabaseRaw(env, path, options = {}) {
   const headers = options.accessToken
     ? userHeaders(env, options.accessToken, options.headers)
-    : serviceHeaders(env, options.headers);
+    : options.auth
+      ? authHeaders(env, options.headers)
+      : serviceHeaders(env, options.headers);
   return fetch(makeUrl(env, path), {
     method: options.method || 'GET',
     headers,
@@ -113,6 +127,7 @@ export async function refreshAuthSession(env, refreshToken) {
   try {
     const { response, data } = await supabaseJson(env, '/auth/v1/token?grant_type=refresh_token', {
       method: 'POST',
+      auth: true,
       body: { refresh_token: refreshToken }
     });
     if (!response.ok || !data || typeof data.access_token !== 'string' || typeof data.refresh_token !== 'string') {

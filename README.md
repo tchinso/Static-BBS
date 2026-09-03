@@ -17,11 +17,12 @@ Pages 프로젝트 `nkmm`은 `main` 브랜치를 자동 배포합니다. 빌드 
 Production과 Preview 환경 모두에 다음 **Encrypted Secret**을 만듭니다.
 
 - `SUPABASE_URL`
+- `SUPABASE_PUBLISHABLE_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `ALLOWED_EMAILS` — 쉼표·줄바꿈·세미콜론으로 구분한 정확한 이메일 주소 목록
 - `SESSION_SECRET` — 충분히 긴 무작위 문자열
 
-`ALLOWED_EMAILS`와 서비스 키는 어떤 소스 파일이나 Cloudflare 일반 변수에도 넣지 마세요.
+`ALLOWED_EMAILS`와 Supabase 키는 어떤 소스 파일이나 Cloudflare 일반 변수에도 넣지 마세요.
 
 ## Supabase
 

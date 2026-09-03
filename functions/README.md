@@ -3,6 +3,7 @@
 Set these as **encrypted Cloudflare Pages secrets** for the production deployment:
 
 - `SUPABASE_URL`
+- `SUPABASE_PUBLISHABLE_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `ALLOWED_EMAILS` (comma, newline, semicolon, or whitespace separated)
 - `SESSION_SECRET` (a unique, high-entropy value of at least 32 characters)
