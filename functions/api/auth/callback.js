@@ -10,6 +10,12 @@ export async function onRequestPost(context) {
   if (!body || typeof body.access_token !== 'string' || typeof body.refresh_token !== 'string') {
     return badRequest('로그인 링크 정보를 확인해주세요.');
   }
+  // Safe temporary-style observability: lengths identify malformed fragment
+  // handling without ever emitting the one-time access or refresh tokens.
+  console.error('auth_callback_received', {
+    accessTokenLength: body.access_token.length,
+    refreshTokenLength: body.refresh_token.length
+  });
   try {
     const established = await establishSession(context.env, {
       accessToken: body.access_token,

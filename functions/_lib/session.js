@@ -138,7 +138,10 @@ function safeExpiresAt(accessToken, expiresIn) {
 export async function establishSession(env, values) {
   const accessToken = typeof values?.accessToken === 'string' ? values.accessToken : '';
   const refreshToken = typeof values?.refreshToken === 'string' ? values.refreshToken : '';
-  if (accessToken.length < 16 || refreshToken.length < 16) return null;
+  if (accessToken.length < 16 || refreshToken.length < 16) {
+    console.error('auth_session_rejected', { reason: 'token_shape' });
+    return null;
+  }
   const user = await getAuthUser(env, accessToken);
   if (!user) {
     console.error('auth_session_rejected', { reason: 'user_lookup' });
