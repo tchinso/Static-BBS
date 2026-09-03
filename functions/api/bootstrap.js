@@ -1,5 +1,5 @@
 import { json, serverError, unauthorized } from '../_lib/http.js';
-import { ensureAdminProfile, listPosts, memberCount } from '../_lib/board.js';
+import { drainImageCleanupQueue, ensureAdminProfile, listPosts, memberCount } from '../_lib/board.js';
 import { getAuthorizedSession } from '../_lib/session.js';
 
 export async function onRequestGet(context) {
@@ -13,6 +13,8 @@ export async function onRequestGet(context) {
 
   try {
     const profile = await ensureAdminProfile(context.env, auth.user);
+    const cleanup = await drainImageCleanupQueue(context.env);
+    if (!cleanup.ok) console.error('image_cleanup_deferred', { pending: cleanup.pending });
     const [posts, count] = await Promise.all([listPosts(context.env), memberCount(context.env)]);
     return json({
       user: { id: auth.user.id, email: auth.user.email, role: 'admin' },

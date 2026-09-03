@@ -1,5 +1,5 @@
 import { badRequest, crossSiteRequest, isSameOriginRequest, json, serverError, unauthorized } from '../_lib/http.js';
-import { imageProxyUrl } from '../_lib/board.js';
+import { deleteImageObjects, imageProxyUrl, queueImageCleanup } from '../_lib/board.js';
 import { getAuthorizedSession } from '../_lib/session.js';
 import { supabaseRaw } from '../_lib/supabase.js';
 
@@ -48,6 +48,25 @@ export async function onRequestPost(context) {
       body: file
     });
     if (!upstream.ok) return json({ error: '이미지를 업로드하지 못했습니다. 잠시 후 다시 시도해주세요.' }, 502);
+    let queued;
+    try {
+      // Uploads are kept for an hour while the post save completes. The post
+      // trigger removes this queue entry once the path is actually referenced.
+      queued = await queueImageCleanup(context.env, [path], {
+        notBefore: new Date(Date.now() + 60 * 60 * 1000)
+      });
+    } catch {
+      queued = { ok: false };
+    }
+    if (!queued.ok) {
+      try {
+        await deleteImageObjects(context.env, [path]);
+      } catch {
+        // The deferred queue is unavailable, so preserve the original upload
+        // error without exposing any internal storage detail.
+      }
+      return json({ error: '이미지 정리 예약을 만들지 못했습니다. 잠시 후 다시 시도해주세요.' }, 502);
+    }
     return json({ path, url: imageProxyUrl(path) }, 201, auth.setCookie ? { 'Set-Cookie': auth.setCookie } : undefined);
   } catch {
     return serverError();

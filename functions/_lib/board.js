@@ -250,10 +250,14 @@ export async function patchPost(env, id, fields) {
   return { ok: result.response.ok, data: firstRow(result.data), detail: result.data };
 }
 
-export async function deleteImageObjects(env, values) {
-  const paths = [...new Set(
+function uniqueImagePaths(values, env) {
+  return [...new Set(
     (Array.isArray(values) ? values : []).map((value) => validImagePath(value, env)).filter(Boolean)
   )];
+}
+
+export async function deleteImageObjects(env, values) {
+  const paths = uniqueImagePaths(values, env);
   if (!paths.length) return { ok: true, deleted: 0 };
 
   // Use the Storage API rather than deleting storage.objects rows directly;
@@ -263,6 +267,48 @@ export async function deleteImageObjects(env, values) {
     body: { prefixes: paths }
   });
   return { ok: result.response.ok, deleted: result.response.ok ? paths.length : 0, detail: result.data };
+}
+
+export async function queueImageCleanup(env, values, { notBefore = new Date() } = {}) {
+  const paths = uniqueImagePaths(values, env);
+  if (!paths.length) return { ok: true, queued: 0 };
+  const timestamp = notBefore instanceof Date && Number.isFinite(notBefore.getTime())
+    ? notBefore.toISOString()
+    : new Date().toISOString();
+  const result = await supabaseJson(env, '/rest/v1/community_image_cleanup_queue', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: paths.map((object_path) => ({ object_path, not_before: timestamp }))
+  });
+  return { ok: result.response.ok, queued: result.response.ok ? paths.length : 0 };
+}
+
+export async function drainImageCleanupQueue(env, { limit = 20 } = {}) {
+  const queued = await supabaseJson(env, restQuery('community_image_cleanup_queue', {
+    select: 'object_path',
+    not_before: `lte.${new Date().toISOString()}`,
+    order: 'not_before.asc',
+    limit: String(Math.min(Math.max(Number(limit) || 20, 1), 100))
+  }));
+  if (!queued.response.ok || !Array.isArray(queued.data)) return { ok: false, deleted: 0, pending: 0 };
+
+  const paths = uniqueImagePaths(queued.data.map((entry) => entry?.object_path), env);
+  if (!paths.length) return { ok: true, deleted: 0, pending: 0 };
+
+  const removed = await deleteImageObjects(env, paths);
+  if (!removed.ok) return { ok: false, deleted: 0, pending: paths.length };
+
+  const acknowledgements = await Promise.all(paths.map(async (objectPath) => {
+    const result = await supabaseJson(env, restQuery('community_image_cleanup_queue', {
+      object_path: `eq.${objectPath}`
+    }), {
+      method: 'DELETE',
+      headers: { Prefer: 'return=minimal' }
+    });
+    return result.response.ok;
+  }));
+  const cleared = acknowledgements.filter(Boolean).length;
+  return { ok: cleared === paths.length, deleted: cleared, pending: paths.length - cleared };
 }
 
 export async function deletePost(env, id) {

@@ -128,27 +128,26 @@ create table if not exists public.community_posts (
 alter table public.community_profiles
   alter column role set default 'admin';
 
-alter table public.community_posts
-  alter column category set default '현생';
-
 do $$
 begin
-  if not exists (
+  if exists (
     select 1
-    from pg_constraint
-    where conrelid = 'public.community_posts'::regclass
-      and conname = 'community_posts_category_check'
+    from public.community_posts
+    where category not in ('현생', '링크', '언어/검색어', '리소스/아이디어', '쥬우니/에카하나')
   ) then
-    alter table public.community_posts
-      add constraint community_posts_category_check
-      check (category in ('현생', '링크', '언어/검색어', '리소스/아이디어', '쥬우니/에카하나')) not valid;
+    raise exception 'Legacy post categories need an explicit migration before the new category constraint can be applied.';
   end if;
 end $$;
 
--- New writes already obey the constraint; validation deliberately stops here
--- if a legacy category needs an explicit human-chosen migration.
 alter table public.community_posts
-  validate constraint community_posts_category_check;
+  alter column category set default '현생';
+
+alter table public.community_posts
+  drop constraint if exists community_posts_category_check;
+
+alter table public.community_posts
+  add constraint community_posts_category_check
+  check (category in ('현생', '링크', '언어/검색어', '리소스/아이디어', '쥬우니/에카하나'));
 
 alter table public.community_posts
   add column if not exists is_pinned boolean;
@@ -347,8 +346,75 @@ create trigger community_enforce_pinned_post_limit
   before insert or update of is_pinned, pin_slot on public.community_posts
   for each row execute procedure public.community_enforce_pinned_post_limit();
 
+-- Storage and Postgres are separate systems. Keep a durable queue in the same
+-- transaction as a post/image-reference change, then let Pages delete the
+-- corresponding Storage objects and acknowledge the queue entry afterwards.
+create table if not exists public.community_image_cleanup_queue (
+  object_path text primary key check (char_length(object_path) between 1 and 512),
+  not_before timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists community_image_cleanup_queue_not_before_idx
+  on public.community_image_cleanup_queue(not_before asc);
+
+create or replace function public.community_queue_image_cleanup()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  -- A newly referenced image must never remain scheduled for cleanup.
+  if tg_op <> 'DELETE' then
+    delete from public.community_image_cleanup_queue
+    where object_path = any(coalesce(new.image_urls, array[]::text[]));
+  end if;
+
+  -- Queue paths that the changed/deleted post no longer references, but only
+  -- after confirming no other post still references the same object.
+  if tg_op = 'UPDATE' or tg_op = 'DELETE' then
+    insert into public.community_image_cleanup_queue (object_path, not_before)
+    select distinct source.previous_path, now()
+    from unnest(coalesce(old.image_urls, array[]::text[])) as source(previous_path)
+    where source.previous_path <> ''
+      and (tg_op = 'DELETE' or not (source.previous_path = any(coalesce(new.image_urls, array[]::text[]))))
+      and not exists (
+        select 1
+        from public.community_posts as existing_post
+        where source.previous_path = any(coalesce(existing_post.image_urls, array[]::text[]))
+      )
+    on conflict (object_path) do update
+      set not_before = excluded.not_before;
+  end if;
+
+  if tg_op = 'DELETE' then return old; end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists community_queue_post_images_on_insert on public.community_posts;
+drop trigger if exists community_queue_post_images_on_update on public.community_posts;
+drop trigger if exists community_queue_post_images_on_delete on public.community_posts;
+
+create trigger community_queue_post_images_on_insert
+  after insert on public.community_posts
+  for each row execute procedure public.community_queue_image_cleanup();
+
+create trigger community_queue_post_images_on_update
+  after update of image_urls on public.community_posts
+  for each row execute procedure public.community_queue_image_cleanup();
+
+create trigger community_queue_post_images_on_delete
+  after delete on public.community_posts
+  for each row execute procedure public.community_queue_image_cleanup();
+
 alter table public.community_profiles enable row level security;
 alter table public.community_posts enable row level security;
+alter table public.community_image_cleanup_queue enable row level security;
+
+revoke all on table public.community_image_cleanup_queue from public, anon, authenticated;
+grant select, insert, update, delete on table public.community_image_cleanup_queue to service_role;
 
 -- 정책을 교체해 재실행 가능하게 만들고, 기존 공개 읽기를 인증된 사용자 읽기로 바꿉니다.
 drop policy if exists "community profiles public read" on public.community_profiles;
@@ -407,6 +473,7 @@ revoke all on function public.community_email_is_allowed() from public, anon;
 revoke all on function public.community_has_board_role(text[]) from public, anon;
 revoke all on function public.community_increment_post_views(uuid) from public, anon;
 revoke all on function public.community_enforce_pinned_post_limit() from public, anon, authenticated;
+revoke all on function public.community_queue_image_cleanup() from public, anon, authenticated;
 
 grant execute on function public.community_has_board_role(text[]) to authenticated;
 grant execute on function public.community_email_is_allowed() to authenticated;
