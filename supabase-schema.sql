@@ -19,6 +19,7 @@ revoke all on table private.community_allowed_email_hashes from public, anon, au
 -- hook as a security-invoker function avoids giving it the database owner's
 -- broad SECURITY DEFINER privileges.
 grant usage on schema private to supabase_auth_admin;
+grant usage on schema extensions to supabase_auth_admin;
 grant select on table private.community_allowed_email_hashes to supabase_auth_admin;
 drop policy if exists "community auth admin reads email hashes" on private.community_allowed_email_hashes;
 create policy "community auth admin reads email hashes" on private.community_allowed_email_hashes
