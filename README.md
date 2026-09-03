@@ -31,6 +31,7 @@ Production과 Preview 환경 모두에 다음 **Encrypted Secret**을 만듭니�
 4. Authentication → URL Configuration에서 Site URL과 Redirect URL을 모두 `https://nkmm.pages.dev/`로 설정합니다.
 5. Authentication → Sessions에서 time-box, inactivity timeout, single-session 강제 설정을 끄면 기본 로그인 유지가 장기 보존됩니다. 브라우저 쿠키·사이트 데이터 삭제는 언제나 로그아웃 효과가 있습니다.
 6. Authentication → Emails → SMTP Settings에서 **Custom SMTP**를 설정합니다. Supabase 기본 SMTP는 조직 팀 멤버 주소에만 발송하므로, 이 게시판처럼 별도의 허용 목록으로 매직 링크를 보내는 운영 환경에서는 사용할 수 없습니다. SMTP 비밀번호·API 키는 저장소나 Cloudflare 변수에 기록하지 말고 Supabase의 SMTP 설정에만 입력합니다.
+7. Authentication → Emails → Templates → **Magic link or OTP**의 본문은 `{{ .ConfirmationURL }}`로 직접 연결하지 말고, `{{ .SiteURL }}/auth/continue.html?confirmation_url={{ .ConfirmationURL }}`를 링크 대상으로 사용합니다. `auth/continue.html`의 사용자가 누르는 버튼이 실제 일회용 링크를 열므로, 이메일 보안 스캐너가 링크를 미리 소비하는 일을 막습니다.
 
 ## 운영 메모
 
