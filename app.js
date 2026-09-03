@@ -1,19 +1,10 @@
 const categories = [
-  { name: '외형 프롬프트', icon: '외형' },
-  { name: 'ooc', icon: 'OOC' },
-  { name: '유저 노트', icon: '노트' },
-  { name: '앵캐 추천', icon: '추천' },
-  { name: '자료실', icon: '자료' }
+  { name: '현생', icon: '현생' },
+  { name: '링크', icon: '링크' },
+  { name: '언어/검색어', icon: '언어' },
+  { name: '리소스/아이디어', icon: '리소스' },
+  { name: '쥬우니/에카하나', icon: '쥬우니' }
 ];
-
-const legacyCategoryNames = {
-  '공지사항': '외형 프롬프트',
-  '자유게시판': 'ooc',
-  '정보공유': '유저 노트',
-  '정보 공유': '유저 노트',
-  '질문답변': '앵캐 추천',
-  '질문 답변': '앵캐 추천'
-};
 
 const boardConfig = window.BOARD_CONFIG || {};
 const viewModeStorageKey = 'nyangcatmemoBoardViewMode';
@@ -182,7 +173,6 @@ async function loadBoard() {
   currentProfile = data.profile || null;
   posts = (data.posts || []).map((post) => ({
     ...post,
-    category: legacyCategoryNames[post.category] || post.category,
     image_urls: normalizeImagePaths(post.image_urls)
   }));
   memberCount = Number.isFinite(data.memberCount) ? data.memberCount : null;
@@ -365,7 +355,7 @@ function openEditor(post = null) {
   selectedPost = post;
   $('#editorTitle').textContent = post ? '글 수정' : '새 글 작성';
   $('#postId').value = post?.id || '';
-  $('#postCategory').value = post?.category || (selectedCategory !== '전체글' ? selectedCategory : 'ooc');
+  $('#postCategory').value = post?.category || (selectedCategory !== '전체글' ? selectedCategory : '현생');
   $('#postAuthor').value = post?.author_name || currentProfile.display_name || '';
   $('#postAuthor').readOnly = true;
   $('#postTitle').value = post?.title || '';
@@ -549,9 +539,9 @@ function bindEvents() {
   $('#postImages').addEventListener('change', (event) => {
     const available = Math.max(0, 5 - retainedImageUrls.length - pendingImageFiles.length);
     const selected = [...event.target.files];
-    const valid = selected.filter((file) => ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type) && file.size <= 8 * 1024 * 1024).slice(0, available);
+    const valid = selected.filter((file) => ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type) && file.size <= 25 * 1024 * 1024).slice(0, available);
     pendingImageFiles.push(...valid);
-    if (valid.length !== selected.length) $('#editorMessage').textContent = '이미지는 최대 5장, 한 장당 8MB 이하로 올려주세요.';
+    if (valid.length !== selected.length) $('#editorMessage').textContent = '이미지는 최대 5장, 한 장당 25MB 이하로 올려주세요.';
     event.target.value = '';
     renderImageEditor();
   });

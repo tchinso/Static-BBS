@@ -1,6 +1,13 @@
 import { supabaseJson } from './supabase.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export const BOARD_CATEGORIES = Object.freeze([
+  '현생',
+  '링크',
+  '언어/검색어',
+  '리소스/아이디어',
+  '쥬우니/에카하나'
+]);
 
 function restQuery(table, query) {
   return `/rest/v1/${table}?${new URLSearchParams(query).toString()}`;
@@ -186,7 +193,7 @@ export function makePostFields(body, env, { creating = false, profile = null, us
 
   if (creating || 'category' in body) {
     const category = cleanText(body.category, { min: 1, max: 60 });
-    if (!category) return { error: '분류를 확인해주세요.' };
+    if (!category || !BOARD_CATEGORIES.includes(category)) return { error: '분류를 확인해주세요.' };
     fields.category = category;
   }
   if (creating || 'title' in body) {
@@ -241,6 +248,21 @@ export async function patchPost(env, id, fields) {
     body: fields
   });
   return { ok: result.response.ok, data: firstRow(result.data), detail: result.data };
+}
+
+export async function deleteImageObjects(env, values) {
+  const paths = [...new Set(
+    (Array.isArray(values) ? values : []).map((value) => validImagePath(value, env)).filter(Boolean)
+  )];
+  if (!paths.length) return { ok: true, deleted: 0 };
+
+  // Use the Storage API rather than deleting storage.objects rows directly;
+  // this removes the actual object as well as its database metadata.
+  const result = await supabaseJson(env, '/storage/v1/object/community-images', {
+    method: 'DELETE',
+    body: { prefixes: paths }
+  });
+  return { ok: result.response.ok, deleted: result.response.ok ? paths.length : 0, detail: result.data };
 }
 
 export async function deletePost(env, id) {

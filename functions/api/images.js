@@ -4,7 +4,7 @@ import { getAuthorizedSession } from '../_lib/session.js';
 import { supabaseRaw } from '../_lib/supabase.js';
 
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
 function safeFileName(value) {
   const normalized = String(value || 'image').normalize('NFKC').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
@@ -33,7 +33,7 @@ export async function onRequestPost(context) {
   }
   const file = form.get('file');
   if (!file || typeof file.arrayBuffer !== 'function' || !ALLOWED_IMAGE_TYPES.has(file.type) || file.size > MAX_IMAGE_BYTES) {
-    return badRequest('JPEG, PNG, WebP, GIF 이미지만 8MB 이하로 업로드할 수 있습니다.');
+    return badRequest('JPEG, PNG, WebP, GIF 이미지만 25MB 이하로 업로드할 수 있습니다.');
   }
 
   const path = `${auth.user.id}/${crypto.randomUUID()}-${safeFileName(file.name)}`;

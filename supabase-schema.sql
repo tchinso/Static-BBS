@@ -109,7 +109,7 @@ create table if not exists public.community_profiles (
 
 create table if not exists public.community_posts (
   id uuid primary key default gen_random_uuid(),
-  category text not null default 'ooc',
+  category text not null default '현생' check (category in ('현생', '링크', '언어/검색어', '리소스/아이디어', '쥬우니/에카하나')),
   title text not null check (char_length(title) between 1 and 100),
   tags text[] not null default '{}',
   image_urls text[] not null default '{}',
@@ -127,6 +127,28 @@ create table if not exists public.community_posts (
 -- create table if not exists 는 기존 테이블에 새 열을 추가하지 않으므로 별도 migration을 둡니다.
 alter table public.community_profiles
   alter column role set default 'admin';
+
+alter table public.community_posts
+  alter column category set default '현생';
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.community_posts'::regclass
+      and conname = 'community_posts_category_check'
+  ) then
+    alter table public.community_posts
+      add constraint community_posts_category_check
+      check (category in ('현생', '링크', '언어/검색어', '리소스/아이디어', '쥬우니/에카하나')) not valid;
+  end if;
+end $$;
+
+-- New writes already obey the constraint; validation deliberately stops here
+-- if a legacy category needs an explicit human-chosen migration.
+alter table public.community_posts
+  validate constraint community_posts_category_check;
 
 alter table public.community_posts
   add column if not exists is_pinned boolean;
@@ -395,7 +417,7 @@ values (
   'community-images',
   'community-images',
   false,
-  8388608,
+  26214400,
   array['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 )
 on conflict (id) do update set
