@@ -1,75 +1,39 @@
-# 앵탐라
+# 냥캣메모
 
-GitHub Pages에 공개하고 Supabase에 게시글을 저장하는 공동 편집 게시판입니다.
+Cloudflare Pages Functions와 Supabase를 사용하는 승인 사용자 전용 게시판입니다. 브라우저와 Git 저장소에는 Supabase URL, anon key, service-role key, 허용 이메일 목록을 넣지 않습니다.
 
-## 들어 있는 기능
+## 보안 구조
 
-- 카테고리별 게시글 목록
-- 목록형·갤러리형 보기 전환 및 보기 방식 유지
-- 제목·내용·작성자 통합 검색
-- 공지글과 일반글
-- 이메일 링크 로그인
-- 직접 로그아웃하기 전까지 로그인 상태 유지
-- 작성자 프로필 이름 변경 및 기존 글 일괄 반영
-- 글쓰기, 본인 글 수정·삭제
-- 편집자의 전체 글 수정
-- 관리자의 전체 글 수정·삭제
-- 모바일 반응형 화면
-- Supabase 연결 전 로컬 데모 모드
+- 브라우저는 Cloudflare Pages의 `/api/*`만 호출합니다.
+- Supabase 자격 증명과 허용 이메일은 Cloudflare의 암호화된 Secret에서만 읽습니다.
+- Supabase `Before User Created` hook과 RLS가 허용되지 않은 이메일의 가입·데이터 접근을 이중으로 차단합니다.
+- 게시글과 이미지 버킷은 모두 비공개이며, 이미지는 로그인 세션을 확인하는 Pages Function을 거쳐 표시됩니다.
+- 로그인 유지는 기본값입니다. 로그아웃하거나 브라우저 저장 데이터를 지우기 전까지, 서버 세션이 자동 갱신됩니다.
 
-## 1. Supabase 만들기
+## Cloudflare Pages
 
-1. <https://supabase.com>에서 새 프로젝트를 만듭니다.
-2. `SQL Editor`를 열고 `supabase-schema.sql`의 내용을 전부 붙여 넣어 실행합니다.
-3. `Project Settings → API`에서 Project URL과 anon public key를 복사합니다.
-4. `config.js`를 열어 아래 두 칸에 붙여 넣습니다.
+Pages 프로젝트 `nkmm`은 `main` 브랜치를 자동 배포합니다. 빌드 명령과 출력 디렉터리는 비워 두고, Pages Functions를 포함하도록 저장소 루트를 배포합니다.
 
-```js
-window.BOARD_CONFIG = {
-  supabaseUrl: 'https://프로젝트주소.supabase.co',
-  supabaseAnonKey: 'anon-public-key',
-  siteName: '원하는 홈페이지 이름'
-};
-```
+Production과 Preview 환경 모두에 다음 **Encrypted Secret**을 만듭니다.
 
-`anon key`는 브라우저에서 사용하는 공개 키입니다. 데이터 보호는 `supabase-schema.sql`에 들어 있는 RLS 권한 규칙이 담당합니다. `service_role` 키는 절대 넣지 마세요.
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `ALLOWED_EMAILS` — 쉼표·줄바꿈·세미콜론으로 구분한 정확한 이메일 주소 목록
+- `SESSION_SECRET` — 충분히 긴 무작위 문자열
 
-## 2. 로그인 주소 등록하기
+`ALLOWED_EMAILS`와 서비스 키는 어떤 소스 파일이나 Cloudflare 일반 변수에도 넣지 마세요.
 
-Supabase의 `Authentication → URL Configuration`에서 다음 값을 등록합니다.
+## Supabase
 
-- Site URL: `https://내아이디.github.io/저장소이름/`
-- Redirect URLs: `https://내아이디.github.io/저장소이름/**`
+1. SQL Editor에서 [supabase-schema.sql](./supabase-schema.sql)을 실행합니다.
+2. `private.community_allowed_email_hashes`에 허용 이메일의 SHA-256 값을 추가합니다. 원문 이메일은 SQL 파일에 기록하지 않습니다.
+3. Authentication → Hooks에서 **Before User Created**에 `public.community_before_user_created` Postgres 함수를 선택합니다.
+4. Authentication → URL Configuration에서 Site URL과 Redirect URL을 모두 `https://nkmm.pages.dev/`로 설정합니다.
+5. Authentication → Sessions에서 time-box, inactivity timeout, single-session 강제 설정을 끄면 기본 로그인 유지가 장기 보존됩니다. 브라우저 쿠키·사이트 데이터 삭제는 언제나 로그아웃 효과가 있습니다.
 
-## 3. GitHub Pages에 올리기
+## 운영 메모
 
-1. GitHub에서 새 공개 저장소를 만듭니다.
-2. 이 폴더 안의 파일들을 저장소 최상단에 올립니다.
-3. 저장소의 `Settings → Pages`로 이동합니다.
-4. `Deploy from a branch`를 선택합니다.
-5. Branch는 `main`, 폴더는 `/(root)`를 선택하고 저장합니다.
-
-잠시 후 `https://내아이디.github.io/저장소이름/`에서 홈페이지가 열립니다.
-
-저장소에 파일을 다시 올리면 포함된 GitHub Pages 작업이 새 버전을 자동으로 공개합니다. 저장소의 `Settings → Pages`에서 Source가 `GitHub Actions`로 표시되면 그대로 두면 됩니다.
-
-## 먼저 화면만 확인하기
-
-Supabase를 만들기 전에도 `index.html`을 더블 클릭하면 데모 게시판을 바로 확인할 수 있습니다. 이때 작성한 글은 해당 브라우저에만 저장됩니다.
-
-## 카테고리 바꾸기
-
-`app.js` 맨 위의 `categories` 목록을 수정하면 됩니다. Supabase의 `posts.category`는 문자열이라 별도의 데이터베이스 수정은 필요하지 않습니다.
-
-## 편집자와 관리자 지정하기
-
-먼저 해당 사용자가 이메일 로그인을 한 번 해야 합니다. 그다음 Supabase SQL Editor에서 `supabase-schema.sql` 맨 아래에 있는 편집자 또는 관리자 지정 문장의 이메일을 바꾸어 실행합니다.
-
-- `member`: 자기 글 작성·수정·삭제
-- `editor`: 모든 글 작성·수정 및 공지 등록
-- `admin`: 모든 글 작성·수정·삭제 및 공지 등록
-
-## 데모 모드
-
-`config.js`의 Supabase 값이 비어 있으면 브라우저의 localStorage를 이용한 데모 모드로 열립니다. 데모 글은 해당 기기에서만 보이며 다른 사람과 공유되지 않습니다.
-
+- 승인 이메일을 추가하거나 제거할 때는 Cloudflare의 `ALLOWED_EMAILS`와 Supabase의 private hash 목록을 함께 갱신합니다.
+- 모든 승인 계정은 `admin`입니다.
+- 최상단 고정은 데이터베이스 차원에서 최대 2개로 제한됩니다.
+- GitHub Pages 배포는 사용하지 않습니다. 공개된 GitHub Pages 사이트가 남아 있다면 GitHub 저장소 Settings에서 Pages를 끄세요.

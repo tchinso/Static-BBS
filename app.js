@@ -15,21 +15,11 @@ const legacyCategoryNames = {
   '질문 답변': '앵캐 추천'
 };
 
-const seedPosts = [
-  { id: 'demo-1', category: '외형 프롬프트', title: '커뮤니티 이용 안내', content: '서로의 취향과 기록을 존중해 주세요.\n\n작성한 글은 본인이 직접 수정할 수 있으며, 편집자는 게시판 전체를 관리할 수 있습니다.', author_name: '관리자', author_id: 'demo', is_notice: true, view_count: 128, created_at: '2026-08-28T09:00:00+09:00', updated_at: '2026-08-28T09:00:00+09:00' },
-  { id: 'demo-2', category: '유저 노트', title: '처음 오신 분들을 위한 게시판 사용법', content: '왼쪽 카테고리에서 원하는 게시판을 고르거나 상단 검색창에서 제목과 내용을 검색할 수 있어요.', author_name: '관리자', author_id: 'demo', is_notice: true, view_count: 83, created_at: '2026-08-27T11:30:00+09:00', updated_at: '2026-08-27T11:30:00+09:00' },
-  { id: 'demo-3', category: 'ooc', title: '오늘의 첫 번째 기록', content: 'GitHub Pages와 Supabase를 연결하면 여러 사람이 같은 게시판에 글을 남길 수 있습니다.', author_name: '유현', author_id: 'demo', is_notice: false, view_count: 24, created_at: '2026-08-26T20:12:00+09:00', updated_at: '2026-08-26T20:12:00+09:00' },
-  { id: 'demo-4', category: '앵캐 추천', title: '이미지도 글에 첨부할 수 있나요?', content: '다음 단계에서 Supabase Storage를 연결하면 이미지 첨부도 추가할 수 있어요.', author_name: '무헌', author_id: 'demo', is_notice: false, view_count: 17, created_at: '2026-08-25T18:40:00+09:00', updated_at: '2026-08-25T18:40:00+09:00' },
-  { id: 'demo-5', category: '자료실', title: '공유 자료 모음', content: '자료의 출처와 사용 범위를 함께 적어주세요.', author_name: '아카이브', author_id: 'demo', is_notice: false, view_count: 9, created_at: '2026-08-24T14:05:00+09:00', updated_at: '2026-08-24T14:05:00+09:00' }
-];
-
 const boardConfig = window.BOARD_CONFIG || {};
-const isConfigured = Boolean(boardConfig.supabaseUrl && boardConfig.supabaseAnonKey);
-const storageKey = 'githubCommunityBoardDemoPosts';
-const viewModeStorageKey = 'aengtamraBoardViewMode';
+const viewModeStorageKey = 'nyangcatmemoBoardViewMode';
+const rememberLoginSettingKey = 'nyangcatmemoRememberLogin';
 const pageSize = 10;
 
-let supabase = null;
 let currentUser = null;
 let currentProfile = null;
 let posts = [];
@@ -46,6 +36,48 @@ let memberCount = null;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
+// Never leave previously fetched private content in the DOM after logout or a
+// rejected/expired session.  The visual gate is not relied on as the security
+// boundary, but clearing it also prevents a local inspector from unhiding a
+// stale board view.
+function clearBoardState() {
+  currentUser = null;
+  currentProfile = null;
+  posts = [];
+  filteredPosts = [];
+  selectedPost = null;
+  retainedImageUrls = [];
+  pendingImageFiles = [];
+  memberCount = null;
+  currentPage = 1;
+
+  ['#postList', '#pagination', '#viewerTags', '#viewerImages', '#imageEditorList'].forEach((selector) => {
+    const element = $(selector);
+    if (element) element.replaceChildren();
+  });
+  const noticeStrip = $('#noticeStrip');
+  if (noticeStrip) {
+    noticeStrip.replaceChildren();
+    noticeStrip.hidden = true;
+  }
+  const viewerContent = $('#viewerContent');
+  if (viewerContent) viewerContent.textContent = '';
+  const viewerTitle = $('#viewerTitle');
+  if (viewerTitle) viewerTitle.textContent = '';
+  const viewerMeta = $('#viewerMeta');
+  if (viewerMeta) viewerMeta.textContent = '';
+  ['#editorDialog', '#viewerDialog', '#profileDialog'].forEach((selector) => {
+    const dialog = $(selector);
+    if (dialog?.open) dialog.close();
+  });
+  const editorForm = $('#postForm');
+  if (editorForm) editorForm.reset();
+  const profileEmail = $('#profileEmail');
+  if (profileEmail) profileEmail.value = '';
+  const profileDisplayName = $('#profileDisplayName');
+  if (profileDisplayName) profileDisplayName.value = '';
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -55,17 +87,41 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
-function readDemoPosts() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(storageKey));
-    return Array.isArray(saved) ? saved : [...seedPosts];
-  } catch {
-    return [...seedPosts];
-  }
+function rememberLoginEnabled() {
+  return localStorage.getItem(rememberLoginSettingKey) !== 'false';
 }
 
-function saveDemoPosts() {
-  localStorage.setItem(storageKey, JSON.stringify(posts));
+function setBoardVisibility(visible, message = '승인된 이메일로 로그인하면 게시판을 볼 수 있습니다.') {
+  $('#appShell').hidden = !visible;
+  $('#authGate').hidden = visible;
+  if (!visible) $('#authGateMessage').textContent = message;
+}
+
+function createApiError(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    credentials: 'same-origin',
+    ...options,
+    headers: {
+      ...(options.body instanceof FormData ? {} : options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {})
+    }
+  });
+  const contentType = response.headers.get('content-type') || '';
+  const body = contentType.includes('application/json') ? await response.json().catch(() => ({})) : {};
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      clearBoardState();
+      setBoardVisibility(false);
+    }
+    throw createApiError(body.error || body.message || '요청을 처리하지 못했습니다.', response.status);
+  }
+  return body;
 }
 
 function formatDate(value) {
@@ -83,84 +139,54 @@ function formatFullDate(value) {
   return new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 
+function normalizeTags(value) {
+  const source = Array.isArray(value) ? value : String(value || '').split(/[\s,]+/);
+  return [...new Set(source.map((tag) => String(tag).trim().replace(/^#+/, '')).filter(Boolean))]
+    .slice(0, 8)
+    .map((tag) => tag.slice(0, 24));
+}
+
+function normalizeImagePaths(values) {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .map((value) => String(value || '').trim().replace(/^\/+/, ''))
+    .filter((value) => value && !value.includes('..') && !/^https?:\/\//i.test(value)))];
+}
+
+function imageUrl(path) {
+  return `/api/images/${normalizeImagePaths([path])[0]?.split('/').map(encodeURIComponent).join('/') || ''}`;
+}
+
+function renderTags(tags) {
+  return normalizeTags(tags).map((tag) => `<span class="tag-chip">#${escapeHtml(tag)}</span>`).join('');
+}
+
 function roleCanEditAll() {
-  return currentProfile && ['admin', 'editor'].includes(currentProfile.role);
+  return currentProfile?.role === 'admin';
 }
 
 function roleIsAdmin() {
-  return currentProfile && currentProfile.role === 'admin';
+  return currentProfile?.role === 'admin';
 }
 
 function canEdit(post) {
-  if (!isConfigured) return true;
   return Boolean(currentUser && (post.author_id === currentUser.id || roleCanEditAll()));
 }
 
 function canDelete(post) {
-  if (!isConfigured) return true;
   return Boolean(currentUser && (post.author_id === currentUser.id || roleIsAdmin()));
 }
 
-async function initSupabase() {
-  if (!isConfigured) return;
-  const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
-  supabase = createClient(boardConfig.supabaseUrl, boardConfig.supabaseAnonKey, {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: true,
-      storage: window.localStorage
-    }
-  });
-  const { data: { session } } = await supabase.auth.getSession();
-  currentUser = session?.user || null;
-  await loadProfile();
-  supabase.auth.onAuthStateChange(async (_event, sessionValue) => {
-    currentUser = sessionValue?.user || null;
-    await loadProfile();
-    updateAuthButton();
-  });
-}
-
-async function loadProfile() {
-  currentProfile = null;
-  if (!supabase || !currentUser) return;
-  const authDisplayName = currentUser.user_metadata?.display_name?.trim();
-  const { data } = await supabase.from('community_profiles').select('id, display_name, role').eq('id', currentUser.id).maybeSingle();
-  if (data) {
-    currentProfile = { ...data, display_name: authDisplayName || data.display_name };
-    return;
-  }
-
-  const newProfile = {
-    id: currentUser.id,
-    display_name: authDisplayName || currentUser.email?.split('@')[0] || '회원',
-    role: 'member'
-  };
-  const { data: createdProfile, error } = await supabase
-    .from('community_profiles')
-    .insert(newProfile)
-    .select('id, display_name, role')
-    .single();
-  currentProfile = error ? newProfile : createdProfile;
-}
-
-async function loadPosts() {
-  if (!supabase) {
-    posts = readDemoPosts();
-    memberCount = new Set(posts.map((post) => post.author_name)).size;
-  } else {
-    const [{ data, error }, { count }] = await Promise.all([
-      supabase.from('community_posts').select('*').order('is_notice', { ascending: false }).order('created_at', { ascending: false }),
-      supabase.from('community_profiles').select('*', { count: 'exact', head: true })
-    ]);
-    if (error) throw error;
-    posts = (data || []).map((post) => ({
-      ...post,
-      category: legacyCategoryNames[post.category] || post.category
-    }));
-    memberCount = count ?? null;
-  }
+async function loadBoard() {
+  const data = await api('/api/bootstrap');
+  currentUser = data.user || null;
+  currentProfile = data.profile || null;
+  posts = (data.posts || []).map((post) => ({
+    ...post,
+    category: legacyCategoryNames[post.category] || post.category,
+    image_urls: normalizeImagePaths(post.image_urls)
+  }));
+  memberCount = Number.isFinite(data.memberCount) ? data.memberCount : null;
+  setBoardVisibility(true);
   renderAll();
 }
 
@@ -173,21 +199,10 @@ function applyFilters() {
   });
 }
 
-function normalizeTags(value) {
-  const source = Array.isArray(value) ? value : String(value || '').split(/[\s,]+/);
-  return [...new Set(source.map((tag) => String(tag).trim().replace(/^#+/, '')).filter(Boolean))]
-    .slice(0, 8)
-    .map((tag) => tag.slice(0, 24));
-}
-
-function renderTags(tags) {
-  return normalizeTags(tags).map((tag) => `<span class="tag-chip">#${escapeHtml(tag)}</span>`).join('');
-}
-
 function renderImageEditor() {
-  const existing = retainedImageUrls.map((url, index) => `
+  const existing = retainedImageUrls.map((path, index) => `
     <div class="image-editor-item">
-      <img src="${escapeHtml(url)}" alt="첨부 이미지 미리보기">
+      <img src="${escapeHtml(imageUrl(path))}" alt="첨부 이미지 미리보기">
       <button type="button" data-remove-existing-image="${index}">삭제</button>
     </div>
   `);
@@ -202,21 +217,15 @@ function renderImageEditor() {
 
 async function uploadPendingImages() {
   if (!pendingImageFiles.length) return [...retainedImageUrls];
-  if (!supabase || !currentUser) throw new Error('로그인 후 이미지를 업로드할 수 있습니다.');
-  const imageUrls = [...retainedImageUrls];
+  const paths = [...retainedImageUrls];
   for (const file of pendingImageFiles) {
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g, '-');
-    const path = `${currentUser.id}/${crypto.randomUUID()}-${safeName}`;
-    const { error } = await supabase.storage.from('community-images').upload(path, file, {
-      cacheControl: '31536000',
-      contentType: file.type,
-      upsert: false
-    });
-    if (error) throw error;
-    const { data } = supabase.storage.from('community-images').getPublicUrl(path);
-    imageUrls.push(data.publicUrl);
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    const data = await api('/api/images', { method: 'POST', body: formData });
+    if (!data.path) throw new Error('이미지 업로드 결과를 확인하지 못했습니다.');
+    paths.push(data.path);
   }
-  return imageUrls;
+  return normalizeImagePaths(paths);
 }
 
 function renderCategories() {
@@ -244,13 +253,13 @@ function renderPosts() {
   });
   $('#postList').innerHTML = viewMode === 'gallery'
     ? pagePosts.map((post) => {
-      const imageUrl = Array.isArray(post.image_urls) ? post.image_urls[0] : '';
+      const firstImage = post.image_urls?.[0];
       const preview = String(post.content || '').replace(/\s+/g, ' ').trim();
       return `
-        <article class="gallery-card ${post.is_notice ? 'is-notice' : ''}" role="listitem" tabindex="0" data-post-id="${escapeHtml(post.id)}">
+        <article class="gallery-card ${post.is_notice ? 'is-notice' : ''} ${post.is_pinned ? 'is-pinned' : ''}" role="listitem" tabindex="0" data-post-id="${escapeHtml(post.id)}">
           <div class="gallery-thumb">
-            ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(post.title)}" loading="lazy">` : '<div class="gallery-placeholder"><span>NO IMAGE</span></div>'}
-            <span class="gallery-category">${post.is_notice ? '공지' : escapeHtml(post.category)}</span>
+            ${firstImage ? `<img src="${escapeHtml(imageUrl(firstImage))}" alt="${escapeHtml(post.title)}" loading="lazy">` : '<div class="gallery-placeholder"><span>NO IMAGE</span></div>'}
+            <span class="gallery-category">${post.is_pinned ? '📌 고정' : post.is_notice ? '공지' : escapeHtml(post.category)}</span>
           </div>
           <div class="gallery-body">
             <h3>${escapeHtml(post.title)}</h3>
@@ -262,9 +271,9 @@ function renderPosts() {
       `;
     }).join('')
     : pagePosts.map((post) => `
-      <div class="post-row post-item ${post.is_notice ? 'is-notice' : ''}" role="row" tabindex="0" data-post-id="${escapeHtml(post.id)}">
+      <div class="post-row post-item ${post.is_notice ? 'is-notice' : ''} ${post.is_pinned ? 'is-pinned' : ''}" role="row" tabindex="0" data-post-id="${escapeHtml(post.id)}">
         <span class="post-category" role="cell">${post.is_notice ? '공지' : escapeHtml(post.category)}</span>
-        <span class="post-title" role="cell"><span class="post-title-text">${post.is_notice ? '<span class="pin">●</span>' : ''}${post.image_urls?.length ? '<span class="image-indicator">▣</span>' : ''}${escapeHtml(post.title)}</span>${post.tags?.length ? `<span class="post-tags">${renderTags(post.tags)}</span>` : ''}</span>
+        <span class="post-title" role="cell"><span class="post-title-text">${post.is_pinned ? '<span class="pin">📌</span>' : ''}${post.is_notice ? '<span class="pin">●</span>' : ''}${post.image_urls?.length ? '<span class="image-indicator">▣</span>' : ''}${escapeHtml(post.title)}</span>${post.tags?.length ? `<span class="post-tags">${renderTags(post.tags)}</span>` : ''}</span>
         <span class="post-author" role="cell">${escapeHtml(post.author_name)}</span>
         <span class="post-date" role="cell">${formatDate(post.created_at)}</span>
         <span class="post-views" role="cell">${Number(post.view_count || 0).toLocaleString('ko-KR')}</span>
@@ -287,13 +296,15 @@ function renderNotices() {
 }
 
 function renderPagination(totalPages) {
-  $('#pagination').innerHTML = Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => `<button class="page-button ${page === currentPage ? 'is-active' : ''}" type="button" data-page="${page}">${page}</button>`).join('');
+  $('#pagination').innerHTML = Array.from({ length: totalPages }, (_, index) => index + 1)
+    .map((page) => `<button class="page-button ${page === currentPage ? 'is-active' : ''}" type="button" data-page="${page}">${page}</button>`)
+    .join('');
 }
 
 function renderHeader() {
   $('#boardTitle').textContent = searchTerm ? `'${searchTerm}' 검색 결과` : selectedCategory === '전체글' ? '전체글보기' : selectedCategory;
   $('#boardEyebrow').textContent = searchTerm ? 'SEARCH RESULT' : selectedCategory === '전체글' ? 'ALL POSTS' : 'CATEGORY';
-  updateAuthButton();
+  $('#loginButton').textContent = currentUser ? `${currentProfile?.display_name || '관리자'} · 프로필` : '로그인';
 }
 
 function renderAll() {
@@ -303,20 +314,26 @@ function renderAll() {
   $('#postCategory').innerHTML = categories.map(({ name }) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
 }
 
-function updateAuthButton() {
-  const button = $('#loginButton');
-  if (!isConfigured) {
-    button.textContent = '데모 모드';
-    return;
-  }
-  button.textContent = currentUser ? `${currentProfile?.display_name || '회원'} · 프로필` : '로그인';
+function setCategory(category) {
+  selectedCategory = category;
+  searchTerm = '';
+  currentPage = 1;
+  $('#searchInput').value = '';
+  $$('.nav-item').forEach((button) => button.classList.toggle('is-active', (category === '전체글' && button.dataset.view === 'all') || button.dataset.category === category));
+  renderAll();
+}
+
+function openLogin() {
+  $('#loginMessage').textContent = '';
+  $('#rememberLogin').checked = rememberLoginEnabled();
+  $('#loginDialog').showModal();
 }
 
 function openProfile() {
   if (!currentUser) return;
   $('#profileEmail').value = currentUser.email || '';
-  $('#profileDisplayName').value = currentProfile?.display_name || currentUser.email?.split('@')[0] || '';
-  $('#profileRole').textContent = currentProfile?.role || 'member';
+  $('#profileDisplayName').value = currentProfile?.display_name || '';
+  $('#profileRole').textContent = currentProfile?.role || 'admin';
   $('#profileMessage').textContent = '';
   $('#profileDialog').showModal();
 }
@@ -331,17 +348,8 @@ async function saveProfile(event) {
   }
   message.textContent = '저장 중...';
   try {
-    const { data, error } = await supabase.auth.updateUser({ data: { display_name: displayName } });
-    if (error) throw error;
-    const { error: postsError } = await supabase
-      .from('community_posts')
-      .update({ author_name: displayName, updated_at: new Date().toISOString() })
-      .eq('author_id', currentUser.id);
-    if (postsError) throw postsError;
-    currentUser = data.user || currentUser;
-    currentProfile = { ...(currentProfile || {}), id: currentUser.id, display_name: displayName, role: currentProfile?.role || 'member' };
-    await loadPosts();
-    updateAuthButton();
+    await api('/api/profile', { method: 'PATCH', body: JSON.stringify({ display_name: displayName }) });
+    await loadBoard();
     message.textContent = '프로필을 저장했습니다.';
     setTimeout(() => $('#profileDialog').open && $('#profileDialog').close(), 500);
   } catch (error) {
@@ -349,35 +357,28 @@ async function saveProfile(event) {
   }
 }
 
-function setCategory(category) {
-  selectedCategory = category;
-  searchTerm = '';
-  currentPage = 1;
-  $('#searchInput').value = '';
-  $$('.nav-item').forEach((button) => button.classList.toggle('is-active', (category === '전체글' && button.dataset.view === 'all') || button.dataset.category === category));
-  renderAll();
-}
-
 function openEditor(post = null) {
-  if (isConfigured && !currentUser) {
-    $('#loginDialog').showModal();
+  if (!currentUser || !currentProfile) {
+    openLogin();
     return;
   }
   selectedPost = post;
   $('#editorTitle').textContent = post ? '글 수정' : '새 글 작성';
   $('#postId').value = post?.id || '';
   $('#postCategory').value = post?.category || (selectedCategory !== '전체글' ? selectedCategory : 'ooc');
-  $('#postAuthor').value = post?.author_name || currentProfile?.display_name || '';
-  $('#postAuthor').readOnly = Boolean(isConfigured && currentProfile?.display_name);
+  $('#postAuthor').value = post?.author_name || currentProfile.display_name || '';
+  $('#postAuthor').readOnly = true;
   $('#postTitle').value = post?.title || '';
   $('#postTags').value = normalizeTags(post?.tags).map((tag) => `#${tag}`).join(' ');
-  retainedImageUrls = Array.isArray(post?.image_urls) ? [...post.image_urls] : [];
+  retainedImageUrls = normalizeImagePaths(post?.image_urls);
   pendingImageFiles = [];
   $('#postImages').value = '';
   renderImageEditor();
   $('#postContent').value = post?.content || '';
+  $('#postPinned').checked = Boolean(post?.is_pinned);
+  $('#postPinned').disabled = !roleIsAdmin();
   $('#postNotice').checked = Boolean(post?.is_notice);
-  $('#postNotice').disabled = Boolean(isConfigured && !roleCanEditAll());
+  $('#postNotice').disabled = !roleCanEditAll();
   $('#editorMessage').textContent = '';
   $('#viewerDialog').close();
   $('#editorDialog').showModal();
@@ -386,21 +387,20 @@ function openEditor(post = null) {
 async function openViewer(id) {
   selectedPost = posts.find((post) => String(post.id) === String(id));
   if (!selectedPost) return;
-  if (supabase) {
-    const { error } = await supabase.rpc('community_increment_post_views', { post_id_value: selectedPost.id });
-    if (!error) selectedPost.view_count = Number(selectedPost.view_count || 0) + 1;
-  } else {
+  try {
+    await api(`/api/posts/${encodeURIComponent(selectedPost.id)}/view`, { method: 'POST' });
     selectedPost.view_count = Number(selectedPost.view_count || 0) + 1;
-    saveDemoPosts();
+  } catch (error) {
+    console.warn(error);
   }
-  $('#viewerCategory').textContent = selectedPost.is_notice ? '공지' : selectedPost.category;
+  $('#viewerCategory').textContent = selectedPost.is_pinned ? '📌 최상단 고정' : selectedPost.is_notice ? '공지' : selectedPost.category;
   $('#viewerTitle').textContent = selectedPost.title;
   $('#viewerMeta').textContent = `${selectedPost.author_name} · ${formatFullDate(selectedPost.created_at)} · 조회 ${Number(selectedPost.view_count || 0).toLocaleString('ko-KR')}`;
   $('#viewerTags').innerHTML = renderTags(selectedPost.tags);
   $('#viewerTags').hidden = normalizeTags(selectedPost.tags).length === 0;
-  const imageUrls = Array.isArray(selectedPost.image_urls) ? selectedPost.image_urls : [];
-  $('#viewerImages').innerHTML = imageUrls.map((url) => `<img src="${escapeHtml(url)}" alt="${escapeHtml(selectedPost.title)} 첨부 이미지" loading="lazy">`).join('');
-  $('#viewerImages').hidden = imageUrls.length === 0;
+  const imagePaths = normalizeImagePaths(selectedPost.image_urls);
+  $('#viewerImages').innerHTML = imagePaths.map((path) => `<img src="${escapeHtml(imageUrl(path))}" alt="${escapeHtml(selectedPost.title)} 첨부 이미지" loading="lazy">`).join('');
+  $('#viewerImages').hidden = imagePaths.length === 0;
   $('#viewerContent').textContent = selectedPost.content;
   $('#editPostButton').hidden = !canEdit(selectedPost);
   $('#deletePostButton').hidden = !canDelete(selectedPost);
@@ -417,34 +417,26 @@ async function savePost(event) {
     title: $('#postTitle').value.trim(),
     tags: normalizeTags($('#postTags').value),
     content: $('#postContent').value.trim(),
-    author_name: $('#postAuthor').value.trim(),
-    is_notice: $('#postNotice').checked,
-    updated_at: new Date().toISOString()
+    is_pinned: $('#postPinned').checked,
+    is_notice: $('#postNotice').checked
   };
-  if (!payload.title || !payload.content || !payload.author_name) {
+  if (!payload.title || !payload.content) {
     $('#editorMessage').textContent = '빈칸을 모두 채워주세요.';
     return;
   }
   try {
+    if (payload.is_pinned && !original?.is_pinned && posts.filter((post) => post.is_pinned).length >= 2) {
+      throw new Error('최상단 고정은 최대 2개까지만 가능합니다.');
+    }
     payload.image_urls = await uploadPendingImages();
-    if (supabase) {
-      if (id) {
-        if (!canEdit(original)) throw new Error('수정 권한이 없습니다.');
-        const { error } = await supabase.from('community_posts').update(payload).eq('id', id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from('community_posts').insert({ ...payload, author_id: currentUser.id });
-        if (error) throw error;
-      }
-    } else if (id) {
-      posts = posts.map((post) => String(post.id) === String(id) ? { ...post, ...payload } : post);
-      saveDemoPosts();
+    if (id) {
+      if (!canEdit(original)) throw new Error('수정 권한이 없습니다.');
+      await api(`/api/posts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) });
     } else {
-      posts.unshift({ ...payload, id: `demo-${Date.now()}`, author_id: 'demo', view_count: 0, created_at: new Date().toISOString() });
-      saveDemoPosts();
+      await api('/api/posts', { method: 'POST', body: JSON.stringify(payload) });
     }
     $('#editorDialog').close();
-    await loadPosts();
+    await loadBoard();
   } catch (error) {
     $('#editorMessage').textContent = error.message || '저장하지 못했습니다.';
   }
@@ -452,27 +444,48 @@ async function savePost(event) {
 
 async function deleteSelectedPost() {
   if (!selectedPost || !canDelete(selectedPost) || !confirm('이 글을 삭제할까요?')) return;
-  if (supabase) {
-    const { error } = await supabase.from('community_posts').delete().eq('id', selectedPost.id);
-    if (error) return alert(error.message);
-  } else {
-    posts = posts.filter((post) => String(post.id) !== String(selectedPost.id));
-    saveDemoPosts();
+  try {
+    await api(`/api/posts/${encodeURIComponent(selectedPost.id)}`, { method: 'DELETE' });
+    $('#viewerDialog').close();
+    selectedPost = null;
+    await loadBoard();
+  } catch (error) {
+    alert(error.message || '삭제하지 못했습니다.');
   }
-  $('#viewerDialog').close();
-  selectedPost = null;
-  await loadPosts();
 }
 
 async function submitLogin(event) {
   event.preventDefault();
   const message = $('#loginMessage');
-  if (!supabase) {
-    message.textContent = '먼저 config.js에 Supabase 주소와 키를 입력해주세요.';
-    return;
+  const email = $('#loginEmail').value.trim();
+  localStorage.setItem(rememberLoginSettingKey, $('#rememberLogin').checked ? 'true' : 'false');
+  message.textContent = '로그인 링크를 보내는 중...';
+  try {
+    await api('/api/auth/request', { method: 'POST', body: JSON.stringify({ email }) });
+    message.textContent = '메일함에서 로그인 링크를 눌러주세요.';
+  } catch {
+    message.textContent = '메일함에서 로그인 링크를 확인해주세요.';
   }
-  const { error } = await supabase.auth.signInWithOtp({ email: $('#loginEmail').value.trim(), options: { emailRedirectTo: location.href.split('#')[0] } });
-  message.textContent = error ? error.message : '메일함에서 로그인 링크를 눌러주세요.';
+}
+
+async function consumeMagicLink() {
+  const fragment = new URLSearchParams(window.location.hash.slice(1));
+  const accessToken = fragment.get('access_token');
+  const refreshToken = fragment.get('refresh_token');
+  if (!accessToken || !refreshToken) return;
+  try {
+    await api('/api/auth/callback', {
+      method: 'POST',
+      body: JSON.stringify({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expires_in: Number(fragment.get('expires_in') || 0),
+        persistent: rememberLoginEnabled()
+      })
+    });
+  } finally {
+    window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
+  }
 }
 
 function bindEvents() {
@@ -500,28 +513,32 @@ function bindEvents() {
   });
   $('#postList').addEventListener('click', (event) => {
     const row = event.target.closest('[data-post-id]');
-    if (row) openViewer(row.dataset.postId);
+    if (row) void openViewer(row.dataset.postId);
   });
   $('#postList').addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
       const row = event.target.closest('[data-post-id]');
-      if (row) { event.preventDefault(); openViewer(row.dataset.postId); }
+      if (row) { event.preventDefault(); void openViewer(row.dataset.postId); }
     }
   });
   $('#noticeStrip').addEventListener('click', (event) => {
     const button = event.target.closest('[data-post-id]');
-    if (button) openViewer(button.dataset.postId);
+    if (button) void openViewer(button.dataset.postId);
   });
   $('#pagination').addEventListener('click', (event) => {
     const button = event.target.closest('[data-page]');
-    if (button) { currentPage = Number(button.dataset.page); renderPosts(); window.scrollTo({ top: $('.board-card').offsetTop - 100, behavior: 'smooth' }); }
+    if (button) {
+      currentPage = Number(button.dataset.page);
+      renderPosts();
+      window.scrollTo({ top: $('.board-card').offsetTop - 100, behavior: 'smooth' });
+    }
   });
   $('#writeButton').addEventListener('click', () => openEditor());
   $('#postForm').addEventListener('submit', savePost);
   $('#postImages').addEventListener('change', (event) => {
     const available = Math.max(0, 5 - retainedImageUrls.length - pendingImageFiles.length);
     const selected = [...event.target.files];
-    const valid = selected.filter((file) => file.type.startsWith('image/') && file.size <= 8 * 1024 * 1024).slice(0, available);
+    const valid = selected.filter((file) => ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type) && file.size <= 8 * 1024 * 1024).slice(0, available);
     pendingImageFiles.push(...valid);
     if (valid.length !== selected.length) $('#editorMessage').textContent = '이미지는 최대 5장, 한 장당 8MB 이하로 올려주세요.';
     event.target.value = '';
@@ -535,23 +552,30 @@ function bindEvents() {
     if (existingButton || pendingButton) renderImageEditor();
   });
   $('#editPostButton').addEventListener('click', () => openEditor(selectedPost));
-  $('#deletePostButton').addEventListener('click', deleteSelectedPost);
-  $('#loginButton').addEventListener('click', async () => {
-    if (!isConfigured) return alert('현재는 데모 모드예요. config.js에 Supabase 정보를 입력하면 로그인을 사용할 수 있어요.');
-    if (currentUser) { openProfile(); return; }
-    $('#loginDialog').showModal();
-  });
+  $('#deletePostButton').addEventListener('click', () => void deleteSelectedPost());
+  $('#loginButton').addEventListener('click', () => currentUser ? openProfile() : openLogin());
+  $('#gateLoginButton').addEventListener('click', openLogin);
   $('#loginForm').addEventListener('submit', submitLogin);
   $('#profileForm').addEventListener('submit', saveProfile);
   $('#profileLogoutButton').addEventListener('click', async () => {
-    $('#profileDialog').close();
-    await supabase.auth.signOut();
+    try {
+      await api('/api/auth/logout', { method: 'POST' });
+    } finally {
+      clearBoardState();
+      setBoardVisibility(false);
+    }
   });
   $('#mobileCategoryToggle').addEventListener('click', () => {
     const list = $('#categoryList');
     const collapsed = list.classList.toggle('is-collapsed');
     $('#mobileCategoryToggle').textContent = collapsed ? '펼치기' : '접기';
     $('#mobileCategoryToggle').setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  });
+  $('#shortcutToggle').addEventListener('click', () => {
+    const list = $('#shortcutList');
+    const collapsed = list.classList.toggle('is-collapsed');
+    $('#shortcutToggle').textContent = collapsed ? '펼치기' : '접기';
+    $('#shortcutToggle').setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   });
   $$('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.closeDialog).close()));
   $$('.modal').forEach((dialog) => dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); }));
@@ -563,17 +587,18 @@ async function start() {
     $('.brand strong').textContent = boardConfig.siteName;
     $('.site-footer span').textContent = boardConfig.siteName;
   }
+  $('#rememberLogin').checked = rememberLoginEnabled();
   bindEvents();
   try {
-    await initSupabase();
-    await loadPosts();
+    await consumeMagicLink();
+    await loadBoard();
   } catch (error) {
     console.error(error);
-    posts = readDemoPosts();
-    renderAll();
-    alert('Supabase 연결에 실패해 데모 모드로 열었습니다. config.js 설정을 확인해주세요.');
+    const message = error.status === 401 || error.status === 403
+      ? '승인된 이메일로 로그인하면 게시판을 볼 수 있습니다.'
+      : '로그인 상태를 확인하지 못했습니다. 다시 로그인해주세요.';
+    setBoardVisibility(false, message);
   }
 }
 
-start();
-
+void start();
