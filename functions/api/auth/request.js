@@ -19,7 +19,9 @@ export async function onRequestPost(context) {
       const status = result.response.status === 429 ? 429 : 502;
       return json({ error: status === 429 ? '잠시 후 다시 시도해주세요.' : '로그인 링크를 보내지 못했습니다. 잠시 후 다시 시도해주세요.' }, status);
     }
-    return json({ magicLinkSent: true, persistent: body?.persistent !== false });
+    // Match the unapproved-address acknowledgement exactly.  Otherwise a
+    // caller could discover the private allowlist by comparing 200 and 202.
+    return json({ magicLinkSent: true, persistent: body?.persistent !== false }, 202);
   } catch {
     return serverError();
   }
