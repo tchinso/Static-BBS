@@ -29,6 +29,14 @@ export function isAllowedEmail(env, email) {
   return allowedEmails(env).has(normalizeEmail(email));
 }
 
+// Supabase Auth supports both modern refresh tokens and its legacy
+// 12-character lowercase token format.
+export function isSupabaseRefreshToken(value) {
+  return typeof value === 'string' && (
+    value.length >= 16 || /^[a-z0-9]{12}$/.test(value)
+  );
+}
+
 function makeUrl(env, path) {
   return new URL(path, `${supabaseConfig(env).url}/`).toString();
 }
@@ -135,7 +143,7 @@ export async function requestMagicLink(env, email) {
 }
 
 export async function refreshAuthSession(env, refreshToken) {
-  if (typeof refreshToken !== 'string' || refreshToken.length < 16) return null;
+  if (!isSupabaseRefreshToken(refreshToken)) return null;
   try {
     const { response, data } = await supabaseJson(env, '/auth/v1/token?grant_type=refresh_token', {
       method: 'POST',

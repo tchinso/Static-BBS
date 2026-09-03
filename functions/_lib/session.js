@@ -1,4 +1,4 @@
-import { getAuthUser, isAllowedEmail, refreshAuthSession } from './supabase.js';
+import { getAuthUser, isAllowedEmail, isSupabaseRefreshToken, refreshAuthSession } from './supabase.js';
 
 export const SESSION_COOKIE = '__Host-nkmm_session';
 export const PERSISTENT_SESSION_SECONDS = 60 * 60 * 24 * 400;
@@ -57,18 +57,9 @@ function validStoredSession(value) {
     value &&
     value.version === 1 &&
     typeof value.accessToken === 'string' && value.accessToken.length >= 16 &&
-    validRefreshToken(value.refreshToken) &&
+    isSupabaseRefreshToken(value.refreshToken) &&
     typeof value.expiresAt === 'number' && Number.isFinite(value.expiresAt) &&
     typeof value.persistent === 'boolean'
-  );
-}
-
-// Supabase Auth still issues the documented legacy 12-character refresh-token
-// format for some sessions. Modern refresh tokens are longer; accepting the
-// legacy shape as well keeps a valid magic-link session from being discarded.
-function validRefreshToken(value) {
-  return typeof value === 'string' && (
-    value.length >= 16 || /^[a-z0-9]{12}$/.test(value)
   );
 }
 
@@ -147,7 +138,7 @@ function safeExpiresAt(accessToken, expiresIn) {
 export async function establishSession(env, values) {
   const accessToken = typeof values?.accessToken === 'string' ? values.accessToken : '';
   const refreshToken = typeof values?.refreshToken === 'string' ? values.refreshToken : '';
-  if (accessToken.length < 16 || !validRefreshToken(refreshToken)) return null;
+  if (accessToken.length < 16 || !isSupabaseRefreshToken(refreshToken)) return null;
   const user = await getAuthUser(env, accessToken);
   if (!user || !isAllowedEmail(env, user.email)) return null;
   const persistent = values?.persistent !== false;
