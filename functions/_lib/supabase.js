@@ -101,11 +101,23 @@ export async function getAuthUser(env, accessToken) {
   if (typeof accessToken !== 'string' || accessToken.length < 16) return null;
   try {
     const { response, data } = await supabaseJson(env, '/auth/v1/user', { accessToken });
-    if (!response.ok || !data || typeof data.id !== 'string') return null;
+    if (!response.ok || !data || typeof data.id !== 'string') {
+      // Keep enough private observability to diagnose a failed callback
+      // without logging the JWT, email, or Supabase response body.
+      console.error('auth_user_lookup_rejected', {
+        status: response.status,
+        hasUserId: typeof data?.id === 'string'
+      });
+      return null;
+    }
     const email = normalizeEmail(data.email);
-    if (!email) return null;
+    if (!email) {
+      console.error('auth_user_lookup_rejected', { status: response.status, hasUserId: true });
+      return null;
+    }
     return { id: data.id, email };
   } catch {
+    console.error('auth_user_lookup_failed');
     return null;
   }
 }

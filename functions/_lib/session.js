@@ -140,7 +140,14 @@ export async function establishSession(env, values) {
   const refreshToken = typeof values?.refreshToken === 'string' ? values.refreshToken : '';
   if (accessToken.length < 16 || refreshToken.length < 16) return null;
   const user = await getAuthUser(env, accessToken);
-  if (!user || !isAllowedEmail(env, user.email)) return null;
+  if (!user) {
+    console.error('auth_session_rejected', { reason: 'user_lookup' });
+    return null;
+  }
+  if (!isAllowedEmail(env, user.email)) {
+    console.error('auth_session_rejected', { reason: 'allowlist' });
+    return null;
+  }
   const persistent = values?.persistent !== false;
   const session = {
     version: 1,
