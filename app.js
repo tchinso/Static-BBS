@@ -463,7 +463,7 @@ async function submitLogin(event) {
   message.textContent = '로그인 링크를 보내는 중...';
   try {
     await api('/api/auth/request', { method: 'POST', body: JSON.stringify({ email, persistent }) });
-    message.textContent = '메일함에서 로그인 링크를 눌러주세요.';
+    message.textContent = '메일함의 가장 최근 로그인 메일을 열고, 안내 화면에서 로그인 계속하기를 눌러주세요.';
   } catch (error) {
     // Do not present a failed server request as if a link was sent. The API
     // already uses the same success response for unapproved addresses, so
@@ -475,9 +475,14 @@ async function submitLogin(event) {
 
 async function consumeMagicLink() {
   const fragment = new URLSearchParams(window.location.hash.slice(1));
+  const errorCode = fragment.get('error_code');
+  if (errorCode) {
+    window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
+    return { errorCode };
+  }
   const accessToken = fragment.get('access_token');
   const refreshToken = fragment.get('refresh_token');
-  if (!accessToken || !refreshToken) return;
+  if (!accessToken || !refreshToken) return { errorCode: null };
   try {
     await api('/api/auth/callback', {
       method: 'POST',
@@ -491,6 +496,7 @@ async function consumeMagicLink() {
   } finally {
     window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
   }
+  return { errorCode: null };
 }
 
 function bindEvents() {
@@ -595,7 +601,13 @@ async function start() {
   $('#rememberLogin').checked = rememberLoginEnabled();
   bindEvents();
   try {
-    await consumeMagicLink();
+    const magicLink = await consumeMagicLink();
+    if (magicLink?.errorCode) {
+      setBoardVisibility(false, magicLink.errorCode === 'otp_expired'
+        ? '로그인 링크가 이미 사용되었거나 만료되었습니다. 가장 최근 로그인 메일의 안내 화면에서 로그인 계속하기를 눌러주세요.'
+        : '로그인 링크를 확인하지 못했습니다. 새 로그인 메일을 요청한 뒤 다시 시도해주세요.');
+      return;
+    }
     await loadBoard();
   } catch (error) {
     console.error(error);
