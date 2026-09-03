@@ -57,9 +57,18 @@ function validStoredSession(value) {
     value &&
     value.version === 1 &&
     typeof value.accessToken === 'string' && value.accessToken.length >= 16 &&
-    typeof value.refreshToken === 'string' && value.refreshToken.length >= 16 &&
+    validRefreshToken(value.refreshToken) &&
     typeof value.expiresAt === 'number' && Number.isFinite(value.expiresAt) &&
     typeof value.persistent === 'boolean'
+  );
+}
+
+// Supabase Auth still issues the documented legacy 12-character refresh-token
+// format for some sessions. Modern refresh tokens are longer; accepting the
+// legacy shape as well keeps a valid magic-link session from being discarded.
+function validRefreshToken(value) {
+  return typeof value === 'string' && (
+    value.length >= 16 || /^[a-z0-9]{12}$/.test(value)
   );
 }
 
@@ -138,19 +147,9 @@ function safeExpiresAt(accessToken, expiresIn) {
 export async function establishSession(env, values) {
   const accessToken = typeof values?.accessToken === 'string' ? values.accessToken : '';
   const refreshToken = typeof values?.refreshToken === 'string' ? values.refreshToken : '';
-  if (accessToken.length < 16 || refreshToken.length < 16) {
-    console.error('auth_session_rejected', { reason: 'token_shape' });
-    return null;
-  }
+  if (accessToken.length < 16 || !validRefreshToken(refreshToken)) return null;
   const user = await getAuthUser(env, accessToken);
-  if (!user) {
-    console.error('auth_session_rejected', { reason: 'user_lookup' });
-    return null;
-  }
-  if (!isAllowedEmail(env, user.email)) {
-    console.error('auth_session_rejected', { reason: 'allowlist' });
-    return null;
-  }
+  if (!user || !isAllowedEmail(env, user.email)) return null;
   const persistent = values?.persistent !== false;
   const session = {
     version: 1,
