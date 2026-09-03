@@ -54,8 +54,9 @@ a { color: inherit; text-decoration: none; }
 .sidebar-card, .board-card, .hero-card { border: 1px solid var(--line); background: var(--panel); box-shadow: 0 8px 26px rgba(31,38,49,.04); }
 .sidebar-card { overflow: hidden; border-radius: 14px; }
 .sidebar-title { display: flex; justify-content: space-between; align-items: center; min-height: 45px; padding: 0 15px; border-bottom: 1px solid var(--line); font-size: 11px; font-weight: 900; letter-spacing: .08em; }
-.sidebar-title button { display: none; border: 0; color: var(--muted); background: transparent; font-size: 10px; cursor: pointer; }
+.sidebar-title button { display: block; border: 0; color: var(--muted); background: transparent; font-size: 10px; cursor: pointer; }
 .category-list { padding: 8px; }
+.category-list.is-collapsed, .shortcut-list.is-collapsed { display: none; }
 .category-button { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 39px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent; text-align: left; font-size: 12px; cursor: pointer; }
 .category-button::before { content: "□"; margin-right: 8px; color: #a5acb6; }
 .category-button span:first-child { display: inline-flex; align-items: center; min-width: 0; }
@@ -69,8 +70,6 @@ a { color: inherit; text-decoration: none; }
 .shortcut-link b { color: #9aa1ab; font-size: 12px; }
 .shortcut-link:hover { color: #fff; background: var(--accent); }
 .shortcut-link:hover b { color: rgba(255,255,255,.78); }
-.shortcut-list.is-collapsed { display: none; }
-.shortcut-card .sidebar-title button { display: block; }
 
 .content { min-width: 0; }
 .hero-card { display: flex; align-items: flex-end; justify-content: space-between; min-height: 175px; padding: 28px 31px; border-radius: 18px; color: #fff; background: linear-gradient(135deg, #3b424c, #1f2329); box-shadow: var(--shadow); }
@@ -190,10 +189,8 @@ a { color: inherit; text-decoration: none; }
   .image-editor-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .page-shell { grid-template-columns: 1fr; margin-top: 16px; }
   .sidebar { position: static; }
-  .sidebar-title button { display: block; }
   .compact-card { display: none; }
   .category-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .category-list.is-collapsed { display: none; }
   .hero-card { min-height: 145px; padding: 23px; }
 }
 @media (max-width: 600px) {
