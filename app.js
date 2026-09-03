@@ -458,13 +458,18 @@ async function submitLogin(event) {
   event.preventDefault();
   const message = $('#loginMessage');
   const email = $('#loginEmail').value.trim();
-  localStorage.setItem(rememberLoginSettingKey, $('#rememberLogin').checked ? 'true' : 'false');
+  const persistent = $('#rememberLogin').checked;
+  localStorage.setItem(rememberLoginSettingKey, persistent ? 'true' : 'false');
   message.textContent = '로그인 링크를 보내는 중...';
   try {
-    await api('/api/auth/request', { method: 'POST', body: JSON.stringify({ email }) });
+    await api('/api/auth/request', { method: 'POST', body: JSON.stringify({ email, persistent }) });
     message.textContent = '메일함에서 로그인 링크를 눌러주세요.';
-  } catch {
-    message.textContent = '메일함에서 로그인 링크를 확인해주세요.';
+  } catch (error) {
+    // Do not present a failed server request as if a link was sent. The API
+    // already uses the same success response for unapproved addresses, so
+    // showing a real transport/configuration error here does not expose the
+    // private allowlist.
+    message.textContent = error.message || '로그인 링크를 보내지 못했습니다. 잠시 후 다시 시도해주세요.';
   }
 }
 
