@@ -117,6 +117,7 @@ create table if not exists public.community_posts (
   author_id uuid not null references auth.users(id) on delete cascade,
   author_name text not null check (char_length(author_name) between 1 and 20),
   is_notice boolean not null default false,
+  is_confidential boolean not null default false,
   is_pinned boolean not null default false,
   pin_slot smallint,
   view_count integer not null default 0 check (view_count >= 0),
@@ -148,6 +149,17 @@ alter table public.community_posts
 alter table public.community_posts
   add constraint community_posts_category_check
   check (category in ('현생', '링크', '언어/검색어', '리소스/아이디어', '쥬우니/에카하나'));
+
+alter table public.community_posts
+  add column if not exists is_confidential boolean;
+
+update public.community_posts
+set is_confidential = false
+where is_confidential is null;
+
+alter table public.community_posts
+  alter column is_confidential set default false,
+  alter column is_confidential set not null;
 
 alter table public.community_posts
   add column if not exists is_pinned boolean;

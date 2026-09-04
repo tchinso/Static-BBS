@@ -1,0 +1,19 @@
+{
+  "name": "냥캣메모",
+  "short_name": "냥캣메모",
+  "description": "승인된 사용자 전용 커뮤니티 게시판",
+  "id": "/",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f6f8",
+  "theme_color": "#1f2631",
+  "icons": [
+    {
+      "src": "./icons/app-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title>냥캣메모</title>
+  <rect width="512" height="512" rx="112" fill="#1f2631"/>
+  <path d="M135 182 183 124l38 49h70l38-49 48 58v159c0 46-54 83-121 83s-121-37-121-83V182Z" fill="#f8f4ec"/>
+  <path d="m164 181 22-26 17 23m145 3 17-26 22 27" fill="none" stroke="#b7bec8" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/>
+  <circle cx="208" cy="271" r="17" fill="#1f2631"/>
+  <circle cx="304" cy="271" r="17" fill="#1f2631"/>
+  <path d="M256 292 238 310h36l-18-18Zm-39 44c18 18 60 18 78 0" fill="none" stroke="#1f2631" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/>
+</svg>

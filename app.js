@@ -10,6 +10,7 @@ const boardConfig = window.BOARD_CONFIG || {};
 const viewModeStorageKey = 'nyangcatmemoBoardViewMode';
 const rememberLoginSettingKey = 'nyangcatmemoRememberLogin';
 const pageSize = 10;
+const maxImagesPerPost = 10;
 
 let currentUser = null;
 let currentProfile = null;
@@ -20,8 +21,9 @@ let searchTerm = '';
 let currentPage = 1;
 let viewMode = localStorage.getItem(viewModeStorageKey) === 'gallery' ? 'gallery' : 'list';
 let selectedPost = null;
-let retainedImageUrls = [];
-let pendingImageFiles = [];
+let editorImages = [];
+let editorIsDirty = false;
+let draggedImageIndex = null;
 let memberCount = null;
 
 const $ = (selector) => document.querySelector(selector);
@@ -37,8 +39,9 @@ function clearBoardState() {
   posts = [];
   filteredPosts = [];
   selectedPost = null;
-  retainedImageUrls = [];
-  pendingImageFiles = [];
+  editorImages = [];
+  editorIsDirty = false;
+  draggedImageIndex = null;
   memberCount = null;
   currentPage = 1;
 
@@ -151,6 +154,39 @@ function renderTags(tags) {
   return normalizeTags(tags).map((tag) => `<span class="tag-chip">#${escapeHtml(tag)}</span>`).join('');
 }
 
+function appendLinkedText(element, value) {
+  const text = String(value ?? '');
+  const urlPattern = /https?:\/\/[^\s<>"']+|www\.[^\s<>"']+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?::\d{1,5})?(?:[/?#][^\s<>"']*)?/gi;
+  let lastIndex = 0;
+  element.replaceChildren();
+
+  for (const match of text.matchAll(urlPattern)) {
+    const matchIndex = match.index ?? 0;
+    const rawUrl = match[0];
+    const linkText = rawUrl.replace(/[),.!?;:\]}]+$/g, '');
+    if (!linkText) continue;
+    if (text[matchIndex - 1] === '@') continue;
+
+    element.append(document.createTextNode(text.slice(lastIndex, matchIndex)));
+    const href = /^https?:\/\//i.test(linkText) ? linkText : `https://${linkText}`;
+    try {
+      const url = new URL(href);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Unsupported URL protocol');
+      const link = document.createElement('a');
+      link.href = url.href;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = linkText;
+      element.append(link);
+    } catch {
+      element.append(document.createTextNode(linkText));
+    }
+    element.append(document.createTextNode(rawUrl.slice(linkText.length)));
+    lastIndex = matchIndex + rawUrl.length;
+  }
+  element.append(document.createTextNode(text.slice(lastIndex)));
+}
+
 function roleCanEditAll() {
   return currentProfile?.role === 'admin';
 }
@@ -165,6 +201,10 @@ function canEdit(post) {
 
 function canDelete(post) {
   return Boolean(currentUser && (post.author_id === currentUser.id || roleIsAdmin()));
+}
+
+function isConfidential(post) {
+  return Boolean(post?.is_confidential);
 }
 
 async function loadBoard() {
@@ -190,27 +230,26 @@ function applyFilters() {
 }
 
 function renderImageEditor() {
-  const existing = retainedImageUrls.map((path, index) => `
-    <div class="image-editor-item">
-      <img src="${escapeHtml(imageUrl(path))}" alt="첨부 이미지 미리보기">
-      <button type="button" data-remove-existing-image="${index}">삭제</button>
+  $('#imageEditorList').innerHTML = editorImages.map((image, index) => `
+    <div class="image-editor-item ${image.kind === 'pending' ? 'is-pending' : ''}" draggable="true" data-image-index="${index}" aria-label="${index + 1}번 이미지, 드래그해 순서 변경">
+      <span class="image-order" aria-hidden="true">${index + 1}</span>
+      ${image.kind === 'retained'
+        ? `<img src="${escapeHtml(imageUrl(image.path))}" alt="${index + 1}번 첨부 이미지 미리보기">`
+        : `<span class="pending-image-name">${escapeHtml(image.file.name)}</span>`}
+      <button type="button" data-remove-image="${index}" aria-label="${index + 1}번 이미지 삭제">삭제</button>
     </div>
-  `);
-  const pending = pendingImageFiles.map((file, index) => `
-    <div class="image-editor-item is-pending">
-      <span>${escapeHtml(file.name)}</span>
-      <button type="button" data-remove-pending-image="${index}">삭제</button>
-    </div>
-  `);
-  $('#imageEditorList').innerHTML = [...existing, ...pending].join('');
+  `).join('');
 }
 
-async function uploadPendingImages() {
-  if (!pendingImageFiles.length) return [...retainedImageUrls];
-  const paths = [...retainedImageUrls];
-  for (const file of pendingImageFiles) {
+async function uploadEditorImages() {
+  const paths = [];
+  for (const image of editorImages) {
+    if (image.kind === 'retained') {
+      paths.push(image.path);
+      continue;
+    }
     const formData = new FormData();
-    formData.append('file', file, file.name);
+    formData.append('file', image.file, image.file.name);
     const data = await api('/api/images', { method: 'POST', body: formData });
     if (!data.path) throw new Error('이미지 업로드 결과를 확인하지 못했습니다.');
     paths.push(data.path);
@@ -243,6 +282,13 @@ function renderPosts() {
   });
   $('#postList').innerHTML = viewMode === 'gallery'
     ? pagePosts.map((post) => {
+      if (isConfidential(post)) {
+        return `
+          <article class="gallery-card is-confidential" role="listitem" tabindex="0" data-post-id="${escapeHtml(post.id)}" aria-label="기밀 자료: ${escapeHtml(post.title)}">
+            <div class="gallery-confidential-title"><h3>🔒 ${escapeHtml(post.title)}</h3></div>
+          </article>
+        `;
+      }
       const firstImage = post.image_urls?.[0];
       const preview = String(post.content || '').replace(/\s+/g, ' ').trim();
       return `
@@ -260,15 +306,24 @@ function renderPosts() {
         </article>
       `;
     }).join('')
-    : pagePosts.map((post) => `
-      <div class="post-row post-item ${post.is_notice ? 'is-notice' : ''} ${post.is_pinned ? 'is-pinned' : ''}" role="row" tabindex="0" data-post-id="${escapeHtml(post.id)}">
-        <span class="post-category" role="cell">${post.is_notice ? '공지' : escapeHtml(post.category)}</span>
-        <span class="post-title" role="cell"><span class="post-title-text">${post.is_pinned ? '<span class="pin">📌</span>' : ''}${post.is_notice ? '<span class="pin">●</span>' : ''}${post.image_urls?.length ? '<span class="image-indicator">▣</span>' : ''}${escapeHtml(post.title)}</span>${post.tags?.length ? `<span class="post-tags">${renderTags(post.tags)}</span>` : ''}</span>
-        <span class="post-author" role="cell">${escapeHtml(post.author_name)}</span>
-        <span class="post-date" role="cell">${formatDate(post.created_at)}</span>
-        <span class="post-views" role="cell">${Number(post.view_count || 0).toLocaleString('ko-KR')}</span>
-      </div>
-    `).join('');
+    : pagePosts.map((post) => {
+      if (isConfidential(post)) {
+        return `
+          <div class="post-row post-item is-confidential" role="row" tabindex="0" data-post-id="${escapeHtml(post.id)}" aria-label="기밀 자료: ${escapeHtml(post.title)}">
+            <span class="post-title" role="cell"><span class="post-title-text">🔒 ${escapeHtml(post.title)}</span></span>
+          </div>
+        `;
+      }
+      return `
+        <div class="post-row post-item ${post.is_notice ? 'is-notice' : ''} ${post.is_pinned ? 'is-pinned' : ''}" role="row" tabindex="0" data-post-id="${escapeHtml(post.id)}">
+          <span class="post-category" role="cell">${post.is_notice ? '공지' : escapeHtml(post.category)}</span>
+          <span class="post-title" role="cell"><span class="post-title-text">${post.is_pinned ? '<span class="pin">📌</span>' : ''}${post.is_notice ? '<span class="pin">●</span>' : ''}${post.image_urls?.length ? '<span class="image-indicator">▣</span>' : ''}${escapeHtml(post.title)}</span>${post.tags?.length ? `<span class="post-tags">${renderTags(post.tags)}</span>` : ''}</span>
+          <span class="post-author" role="cell">${escapeHtml(post.author_name)}</span>
+          <span class="post-date" role="cell">${formatDate(post.created_at)}</span>
+          <span class="post-views" role="cell">${Number(post.view_count || 0).toLocaleString('ko-KR')}</span>
+        </div>
+      `;
+    }).join('');
   $('#emptyState').hidden = pagePosts.length > 0;
   renderPagination(totalPages);
   renderNotices();
@@ -360,8 +415,7 @@ function openEditor(post = null) {
   $('#postAuthor').readOnly = true;
   $('#postTitle').value = post?.title || '';
   $('#postTags').value = normalizeTags(post?.tags).map((tag) => `#${tag}`).join(' ');
-  retainedImageUrls = normalizeImagePaths(post?.image_urls);
-  pendingImageFiles = [];
+  editorImages = normalizeImagePaths(post?.image_urls).map((path) => ({ kind: 'retained', path }));
   $('#postImages').value = '';
   renderImageEditor();
   $('#postContent').value = post?.content || '';
@@ -369,21 +423,74 @@ function openEditor(post = null) {
   $('#postPinned').disabled = !roleIsAdmin();
   $('#postNotice').checked = Boolean(post?.is_notice);
   $('#postNotice').disabled = !roleCanEditAll();
+  $('#postConfidential').checked = isConfidential(post);
   $('#editorMessage').textContent = '';
   $('#viewerDialog').close();
   $('#editorDialog').showModal();
+  editorIsDirty = false;
+}
+
+function markEditorDirty() {
+  if ($('#editorDialog').open) editorIsDirty = true;
+}
+
+function confirmEditorDiscard() {
+  return !editorIsDirty || window.confirm('작성 중인 내용과 이미지 변경 사항이 사라집니다. 닫을까요?');
+}
+
+function closeDialog(dialogId) {
+  const dialog = document.getElementById(dialogId);
+  if (!dialog?.open) return;
+  if (dialogId === 'editorDialog' && !confirmEditorDiscard()) return;
+  if (dialogId === 'editorDialog') editorIsDirty = false;
+  dialog.close();
+}
+
+async function copySelectedPostContent() {
+  if (!selectedPost) return;
+  const text = String(selectedPost.content || '');
+  try {
+    let copied = false;
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      } catch {
+        // Fall back for browsers that expose Clipboard API but deny its permission.
+      }
+    }
+    if (!copied) {
+      const temporaryField = document.createElement('textarea');
+      temporaryField.value = text;
+      temporaryField.setAttribute('readonly', '');
+      temporaryField.style.position = 'fixed';
+      temporaryField.style.opacity = '0';
+      document.body.append(temporaryField);
+      temporaryField.select();
+      copied = document.execCommand('copy');
+      temporaryField.remove();
+      if (!copied) throw new Error('Copy command failed');
+    }
+    const button = $('#copyPostContentButton');
+    button.textContent = '복사됨';
+    setTimeout(() => { if (button) button.textContent = '내용 복사'; }, 1400);
+  } catch {
+    alert('내용을 복사하지 못했습니다. 직접 선택해 복사해주세요.');
+  }
 }
 
 async function openViewer(id) {
-  selectedPost = posts.find((post) => String(post.id) === String(id));
-  if (!selectedPost) return;
+  const post = posts.find((item) => String(item.id) === String(id));
+  if (!post) return;
+  if (isConfidential(post) && !window.confirm('기밀 자료입니다. Discord 화면 공유가 꺼져 있는지 확인한 뒤 열어주세요.')) return;
+  selectedPost = post;
   try {
     await api(`/api/posts/${encodeURIComponent(selectedPost.id)}/view`, { method: 'POST' });
     selectedPost.view_count = Number(selectedPost.view_count || 0) + 1;
   } catch (error) {
     console.warn(error);
   }
-  $('#viewerCategory').textContent = selectedPost.is_pinned ? '📌 최상단 고정' : selectedPost.is_notice ? '공지' : selectedPost.category;
+  $('#viewerCategory').textContent = isConfidential(selectedPost) ? '🔒 기밀 자료' : selectedPost.is_pinned ? '📌 최상단 고정' : selectedPost.is_notice ? '공지' : selectedPost.category;
   $('#viewerTitle').textContent = selectedPost.title;
   $('#viewerMeta').textContent = `${selectedPost.author_name} · ${formatFullDate(selectedPost.created_at)} · 조회 ${Number(selectedPost.view_count || 0).toLocaleString('ko-KR')}`;
   $('#viewerTags').innerHTML = renderTags(selectedPost.tags);
@@ -391,7 +498,7 @@ async function openViewer(id) {
   const imagePaths = normalizeImagePaths(selectedPost.image_urls);
   $('#viewerImages').innerHTML = imagePaths.map((path) => `<img src="${escapeHtml(imageUrl(path))}" alt="${escapeHtml(selectedPost.title)} 첨부 이미지" loading="lazy">`).join('');
   $('#viewerImages').hidden = imagePaths.length === 0;
-  $('#viewerContent').textContent = selectedPost.content;
+  appendLinkedText($('#viewerContent'), selectedPost.content);
   $('#editPostButton').hidden = !canEdit(selectedPost);
   $('#deletePostButton').hidden = !canDelete(selectedPost);
   $('#viewerDialog').showModal();
@@ -408,7 +515,8 @@ async function savePost(event) {
     tags: normalizeTags($('#postTags').value),
     content: $('#postContent').value.trim(),
     is_pinned: $('#postPinned').checked,
-    is_notice: $('#postNotice').checked
+    is_notice: $('#postNotice').checked,
+    is_confidential: $('#postConfidential').checked
   };
   if (!payload.title || !payload.content) {
     $('#editorMessage').textContent = '빈칸을 모두 채워주세요.';
@@ -418,13 +526,14 @@ async function savePost(event) {
     if (payload.is_pinned && !original?.is_pinned && posts.filter((post) => post.is_pinned).length >= 2) {
       throw new Error('최상단 고정은 최대 2개까지만 가능합니다.');
     }
-    payload.image_urls = await uploadPendingImages();
+    payload.image_urls = await uploadEditorImages();
     if (id) {
       if (!canEdit(original)) throw new Error('수정 권한이 없습니다.');
       await api(`/api/posts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) });
     } else {
       await api('/api/posts', { method: 'POST', body: JSON.stringify(payload) });
     }
+    editorIsDirty = false;
     $('#editorDialog').close();
     await loadBoard();
   } catch (error) {
@@ -536,24 +645,67 @@ function bindEvents() {
   });
   $('#writeButton').addEventListener('click', () => openEditor());
   $('#postForm').addEventListener('submit', savePost);
+  $('#postForm').addEventListener('input', markEditorDirty);
+  $('#postForm').addEventListener('change', markEditorDirty);
   $('#postImages').addEventListener('change', (event) => {
-    const available = Math.max(0, 5 - retainedImageUrls.length - pendingImageFiles.length);
+    const available = Math.max(0, maxImagesPerPost - editorImages.length);
     const selected = [...event.target.files];
     const valid = selected.filter((file) => ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type) && file.size <= 25 * 1024 * 1024).slice(0, available);
-    pendingImageFiles.push(...valid);
-    if (valid.length !== selected.length) $('#editorMessage').textContent = '이미지는 최대 5장, 한 장당 25MB 이하로 올려주세요.';
+    editorImages.push(...valid.map((file) => ({ kind: 'pending', file })));
+    if (valid.length !== selected.length) $('#editorMessage').textContent = '이미지는 최대 10장, 한 장당 25MB 이하로 올려주세요.';
     event.target.value = '';
+    if (valid.length) markEditorDirty();
     renderImageEditor();
   });
   $('#imageEditorList').addEventListener('click', (event) => {
-    const existingButton = event.target.closest('[data-remove-existing-image]');
-    const pendingButton = event.target.closest('[data-remove-pending-image]');
-    if (existingButton) retainedImageUrls.splice(Number(existingButton.dataset.removeExistingImage), 1);
-    if (pendingButton) pendingImageFiles.splice(Number(pendingButton.dataset.removePendingImage), 1);
-    if (existingButton || pendingButton) renderImageEditor();
+    const removeButton = event.target.closest('[data-remove-image]');
+    if (!removeButton) return;
+    editorImages.splice(Number(removeButton.dataset.removeImage), 1);
+    markEditorDirty();
+    renderImageEditor();
+  });
+  $('#imageEditorList').addEventListener('dragstart', (event) => {
+    const item = event.target.closest('[data-image-index]');
+    if (!item) return;
+    draggedImageIndex = Number(item.dataset.imageIndex);
+    item.classList.add('is-dragging');
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(draggedImageIndex));
+  });
+  $('#imageEditorList').addEventListener('dragover', (event) => {
+    const item = event.target.closest('[data-image-index]');
+    if (!item || draggedImageIndex === null) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    $$('.image-editor-item.is-drop-target').forEach((target) => target.classList.remove('is-drop-target'));
+    item.classList.add('is-drop-target');
+  });
+  $('#imageEditorList').addEventListener('dragleave', (event) => {
+    const item = event.target.closest('[data-image-index]');
+    if (item && !item.contains(event.relatedTarget)) item.classList.remove('is-drop-target');
+  });
+  $('#imageEditorList').addEventListener('dragend', () => {
+    draggedImageIndex = null;
+    $$('.image-editor-item.is-dragging, .image-editor-item.is-drop-target').forEach((item) => item.classList.remove('is-dragging', 'is-drop-target'));
+  });
+  $('#imageEditorList').addEventListener('drop', (event) => {
+    const item = event.target.closest('[data-image-index]');
+    if (!item || draggedImageIndex === null) return;
+    event.preventDefault();
+    const fromIndex = draggedImageIndex;
+    const targetIndex = Number(item.dataset.imageIndex);
+    const bounds = item.getBoundingClientRect();
+    let insertAt = targetIndex + (event.clientY > bounds.top + bounds.height / 2 ? 1 : 0);
+    const [image] = editorImages.splice(fromIndex, 1);
+    if (fromIndex < insertAt) insertAt -= 1;
+    editorImages.splice(insertAt, 0, image);
+    draggedImageIndex = null;
+    markEditorDirty();
+    renderImageEditor();
   });
   $('#editPostButton').addEventListener('click', () => openEditor(selectedPost));
   $('#deletePostButton').addEventListener('click', () => void deleteSelectedPost());
+  $('#copyPostContentButton').addEventListener('click', () => void copySelectedPostContent());
   $('#loginButton').addEventListener('click', () => currentUser ? openProfile() : openLogin());
   $('#gateLoginButton').addEventListener('click', openLogin);
   $('#loginForm').addEventListener('submit', submitLogin);
@@ -578,8 +730,24 @@ function bindEvents() {
     $('#shortcutToggle').textContent = collapsed ? '펼치기' : '접기';
     $('#shortcutToggle').setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   });
-  $$('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.closeDialog).close()));
-  $$('.modal').forEach((dialog) => dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); }));
+  $$('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => closeDialog(button.dataset.closeDialog)));
+  $$('.modal').forEach((dialog) => dialog.addEventListener('click', (event) => { if (event.target === dialog) closeDialog(dialog.id); }));
+  $('#editorDialog').addEventListener('cancel', (event) => {
+    if (!confirmEditorDiscard()) event.preventDefault();
+    else editorIsDirty = false;
+  });
+  window.addEventListener('beforeunload', (event) => {
+    if (!$('#editorDialog').open || !editorIsDirty) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+}
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch((error) => console.warn('Service worker registration failed.', error));
+  });
 }
 
 async function start() {
@@ -590,6 +758,7 @@ async function start() {
   }
   $('#rememberLogin').checked = rememberLoginEnabled();
   bindEvents();
+  registerServiceWorker();
   try {
     const magicLink = await consumeMagicLink();
     if (magicLink?.errorCode) {

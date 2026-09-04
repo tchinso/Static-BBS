@@ -77,7 +77,7 @@ export function validImagePath(value, env) {
 }
 
 export function cleanImagePaths(value, env) {
-  if (!Array.isArray(value) || value.length > 12) return null;
+  if (!Array.isArray(value) || value.length > 10) return null;
   const paths = [];
   for (const item of value) {
     const path = validImagePath(item, env);
@@ -216,8 +216,8 @@ export function makePostFields(body, env, { creating = false, profile = null, us
     if (!imageUrls) return { error: '첨부 이미지 정보를 확인해주세요.' };
     fields.image_urls = imageUrls;
   }
-  if (!writeBoolean(body, 'is_notice', fields) || !writeBoolean(body, 'is_pinned', fields)) {
-    return { error: '고정 또는 공지 설정을 확인해주세요.' };
+  if (!writeBoolean(body, 'is_notice', fields) || !writeBoolean(body, 'is_pinned', fields) || !writeBoolean(body, 'is_confidential', fields)) {
+    return { error: '고정, 공지 또는 기밀 자료 설정을 확인해주세요.' };
   }
 
   if (creating) {

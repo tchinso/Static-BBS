@@ -27,6 +27,7 @@ Production과 Preview 환경 모두에 다음 **Encrypted Secret**을 만듭니�
 ## Supabase
 
 1. SQL Editor에서 [supabase-schema.sql](./supabase-schema.sql)을 실행합니다.
+   기존 프로젝트는 이어서 [20260905-confidential-posts.sql](./supabase-migrations/20260905-confidential-posts.sql)도 한 번 실행합니다.
 2. `private.community_allowed_email_hashes`에 허용 이메일의 SHA-256 값을 추가합니다. 원문 이메일은 SQL 파일에 기록하지 않습니다.
 3. Authentication → Hooks에서 **Before User Created**에 `public.community_before_user_created` Postgres 함수를 선택합니다.
 4. Authentication → URL Configuration에서 Site URL과 Redirect URL을 모두 `https://nkmm.pages.dev/`로 설정합니다.
@@ -40,5 +41,7 @@ Production과 Preview 환경 모두에 다음 **Encrypted Secret**을 만듭니�
 - 모든 승인 계정은 `admin`입니다.
 - 최상단 고정은 데이터베이스 차원에서 최대 2개로 제한됩니다.
 - 게시글 분류는 `현생`, `링크`, `언어/검색어`, `리소스/아이디어`, `쥬우니/에카하나`만 사용할 수 있습니다.
-- 이미지는 JPG, PNG, WebP, GIF 형식으로 한 장당 최대 25MB, 글당 최대 5장입니다. 게시글 삭제·이미지 제거·저장 실패 뒤 남은 업로드는 내구성 있는 정리 큐를 통해 Storage API에서 재시도 삭제합니다.
+- 이미지는 JPG, PNG, WebP, GIF 형식으로 한 장당 최대 25MB, 글당 최대 10장입니다. 게시글 삭제·이미지 제거·저장 실패 뒤 남은 업로드는 내구성 있는 정리 큐를 통해 Storage API에서 재시도 삭제합니다.
+- `기밀 자료로 지정`한 글은 목록에서 제목만 보이며, 열기 전에 Discord 화면 공유 여부를 확인합니다. 이는 화면 노출을 줄이기 위한 UI 보호 기능이며, 권한 제어를 대체하지는 않습니다.
+- PWA 형식을 적용해 지원 브라우저의 설치 또는 바로가기 만들기 메뉴에서 앱처럼 설치할 수 있습니다.
 - GitHub Pages 배포는 사용하지 않습니다. 공개된 GitHub Pages 사이트가 남아 있다면 GitHub 저장소 Settings에서 Pages를 끄세요.
