@@ -257,12 +257,18 @@ async function uploadEditorImages() {
   return normalizeImagePaths(paths);
 }
 
-function renderCategories() {
-  const counts = Object.fromEntries(categories.map(({ name }) => [name, posts.filter((post) => post.category === name).length]));
-  $('#categoryList').innerHTML = [
-    `<button class="category-button ${selectedCategory === '전체글' ? 'is-active' : ''}" type="button" data-category="전체글"><span>전체글보기</span><em>${posts.length}</em></button>`,
-    ...categories.map(({ name }) => `<button class="category-button ${selectedCategory === name ? 'is-active' : ''}" type="button" data-category="${escapeHtml(name)}"><span>${escapeHtml(name)}</span><em>${counts[name] || 0}</em></button>`)
-  ].join('');
+function formatPostCategory(post) {
+  return `${post.is_notice ? '공지 ' : ''}${post.is_pinned ? '📌 ' : ''}${post.category || ''}`.trim();
+}
+
+function renderPostCategory(post) {
+  return `${post.is_notice ? '<span class="notice-label">공지</span>' : ''}${post.is_pinned ? '<span class="pin" aria-label="고정">📌</span>' : ''}<span class="category-name">${escapeHtml(post.category)}</span>`;
+}
+
+function summarizeNoticeContent(value, maxLength = 240) {
+  const content = String(value || '').replace(/\s+/g, ' ').trim();
+  const characters = Array.from(content);
+  return characters.length > maxLength ? `${characters.slice(0, maxLength).join('')}…` : content;
 }
 
 function renderPosts() {
@@ -296,11 +302,11 @@ function renderPosts() {
           ${firstImage ? `
             <div class="gallery-thumb">
               <img src="${escapeHtml(imageUrl(firstImage))}" alt="${escapeHtml(post.title)}" loading="lazy">
-              <span class="gallery-category">${post.is_pinned ? '📌 고정' : post.is_notice ? '공지' : escapeHtml(post.category)}</span>
+              <span class="gallery-category">${escapeHtml(formatPostCategory(post))}</span>
             </div>
           ` : ''}
           <div class="gallery-body">
-            ${firstImage ? '' : `<span class="gallery-category">${post.is_pinned ? '📌 고정' : post.is_notice ? '공지' : escapeHtml(post.category)}</span>`}
+            ${firstImage ? '' : `<span class="gallery-category">${escapeHtml(formatPostCategory(post))}</span>`}
             <h3>${escapeHtml(post.title)}</h3>
             ${preview ? `<p>${escapeHtml(preview)}</p>` : ''}
             ${post.tags?.length ? `<div class="post-tags">${renderTags(post.tags)}</div>` : ''}
@@ -319,8 +325,8 @@ function renderPosts() {
       }
       return `
         <div class="post-row post-item ${post.is_notice ? 'is-notice' : ''} ${post.is_pinned ? 'is-pinned' : ''}" role="row" tabindex="0" data-post-id="${escapeHtml(post.id)}">
-          <span class="post-category" role="cell">${post.is_notice ? '공지' : escapeHtml(post.category)}</span>
-          <span class="post-title" role="cell"><span class="post-title-text">${post.is_pinned ? '<span class="pin">📌</span>' : ''}${post.is_notice ? '<span class="pin">●</span>' : ''}${post.image_urls?.length ? '<span class="image-indicator">▣</span>' : ''}${escapeHtml(post.title)}</span>${post.tags?.length ? `<span class="post-tags">${renderTags(post.tags)}</span>` : ''}</span>
+          <span class="post-category" role="cell">${renderPostCategory(post)}</span>
+          <span class="post-title" role="cell"><span class="post-title-text">${post.image_urls?.length ? '<span class="image-indicator">▣</span>' : ''}${escapeHtml(post.title)}</span>${post.tags?.length ? `<span class="post-tags">${renderTags(post.tags)}</span>` : ''}</span>
           <span class="post-author" role="cell">${escapeHtml(post.author_name)}</span>
           <span class="post-date" role="cell">${formatDate(post.created_at)}</span>
           <span class="post-views" role="cell">${Number(post.view_count || 0).toLocaleString('ko-KR')}</span>
@@ -333,13 +339,27 @@ function renderPosts() {
 }
 
 function renderNotices() {
-  const notices = posts.filter((post) => post.is_notice).slice(0, 2);
+  const noticePosts = posts.filter((post) => post.is_notice);
+  const notices = noticePosts.slice(0, 2);
   const strip = $('#noticeStrip');
   if (!notices.length || selectedCategory !== '전체글' || searchTerm) {
     strip.hidden = true;
     return;
   }
-  strip.innerHTML = notices.map((post) => `<button type="button" data-post-id="${escapeHtml(post.id)}"><b>공지</b> ${escapeHtml(post.title)}</button>`).join('');
+  if (noticePosts.length === 1 && !isConfidential(noticePosts[0])) {
+    const [post] = noticePosts;
+    const content = summarizeNoticeContent(post.content);
+    const firstImage = post.image_urls?.[0];
+    strip.innerHTML = `
+      <button class="notice-single ${firstImage ? 'has-image' : ''}" type="button" data-post-id="${escapeHtml(post.id)}">
+        <span class="notice-heading"><b>공지</b><strong>${escapeHtml(post.title)}</strong></span>
+        ${content ? `<span class="notice-content">${escapeHtml(content)}</span>` : ''}
+        ${firstImage ? `<img class="notice-thumbnail" src="${escapeHtml(imageUrl(firstImage))}" alt="" loading="lazy" decoding="async">` : ''}
+      </button>
+    `;
+  } else {
+    strip.innerHTML = notices.map((post) => `<button type="button" data-post-id="${escapeHtml(post.id)}"><b>공지</b> ${escapeHtml(post.title)}</button>`).join('');
+  }
   strip.hidden = false;
 }
 
@@ -356,7 +376,6 @@ function renderHeader() {
 }
 
 function renderAll() {
-  renderCategories();
   renderPosts();
   renderHeader();
   $('#postCategory').innerHTML = categories.map(({ name }) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
@@ -493,7 +512,7 @@ async function openViewer(id) {
   } catch (error) {
     console.warn(error);
   }
-  $('#viewerCategory').textContent = isConfidential(selectedPost) ? '🔒 기밀 자료' : selectedPost.is_pinned ? '📌 최상단 고정' : selectedPost.is_notice ? '공지' : selectedPost.category;
+  $('#viewerCategory').textContent = isConfidential(selectedPost) ? '🔒 기밀 자료' : formatPostCategory(selectedPost);
   $('#viewerTitle').textContent = selectedPost.title;
   $('#viewerMeta').textContent = `${selectedPost.author_name} · ${formatFullDate(selectedPost.created_at)} · 조회 ${Number(selectedPost.view_count || 0).toLocaleString('ko-KR')}`;
   $('#viewerTags').innerHTML = renderTags(selectedPost.tags);
@@ -610,10 +629,6 @@ function bindEvents() {
     currentPage = 1;
     renderPosts();
   });
-  $('#categoryList').addEventListener('click', (event) => {
-    const button = event.target.closest('[data-category]');
-    if (button) setCategory(button.dataset.category);
-  });
   $('.community-nav').addEventListener('click', (event) => {
     const button = event.target.closest('.nav-item');
     if (button) setCategory(button.dataset.category || '전체글');
@@ -720,12 +735,6 @@ function bindEvents() {
       clearBoardState();
       setBoardVisibility(false);
     }
-  });
-  $('#mobileCategoryToggle').addEventListener('click', () => {
-    const list = $('#categoryList');
-    const collapsed = list.classList.toggle('is-collapsed');
-    $('#mobileCategoryToggle').textContent = collapsed ? '펼치기' : '접기';
-    $('#mobileCategoryToggle').setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   });
   $('#shortcutToggle').addEventListener('click', () => {
     const list = $('#shortcutList');
