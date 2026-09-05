@@ -266,14 +266,16 @@ function renderPostCategory(post) {
 }
 
 function summarizeNoticeContent(value, maxLength = 240) {
+  const lineBreakToken = '\uE000';
+  value = String(value || '').trim().replace(/\r\n?|\n/g, lineBreakToken);
   const content = String(value || '').replace(/\s+/g, ' ').trim();
-  const characters = Array.from(content);
-  return characters.length > maxLength ? `${characters.slice(0, maxLength).join('')}…` : content;
+  const characters = Array.from(content.replaceAll(lineBreakToken, '\n'));
+  return characters.length > maxLength ? `${characters.slice(0, maxLength).join('')}…` : characters.join('');
 }
 
 function renderPosts() {
   applyFilters();
-  const currentPageSize = viewMode === 'gallery' ? 9 : pageSize;
+  const currentPageSize = viewMode === 'gallery' ? 20 : pageSize;
   const totalPages = Math.max(1, Math.ceil(filteredPosts.length / currentPageSize));
   currentPage = Math.min(currentPage, totalPages);
   const pagePosts = filteredPosts.slice((currentPage - 1) * currentPageSize, currentPage * currentPageSize);
