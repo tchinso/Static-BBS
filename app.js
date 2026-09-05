@@ -292,12 +292,15 @@ function renderPosts() {
       const firstImage = post.image_urls?.[0];
       const preview = String(post.content || '').replace(/\s+/g, ' ').trim();
       return `
-        <article class="gallery-card ${post.is_notice ? 'is-notice' : ''} ${post.is_pinned ? 'is-pinned' : ''}" role="listitem" tabindex="0" data-post-id="${escapeHtml(post.id)}">
-          <div class="gallery-thumb">
-            ${firstImage ? `<img src="${escapeHtml(imageUrl(firstImage))}" alt="${escapeHtml(post.title)}" loading="lazy">` : '<div class="gallery-placeholder"><span>NO IMAGE</span></div>'}
-            <span class="gallery-category">${post.is_pinned ? '📌 고정' : post.is_notice ? '공지' : escapeHtml(post.category)}</span>
-          </div>
+        <article class="gallery-card ${firstImage ? '' : 'has-no-image'} ${post.is_notice ? 'is-notice' : ''} ${post.is_pinned ? 'is-pinned' : ''}" role="listitem" tabindex="0" data-post-id="${escapeHtml(post.id)}">
+          ${firstImage ? `
+            <div class="gallery-thumb">
+              <img src="${escapeHtml(imageUrl(firstImage))}" alt="${escapeHtml(post.title)}" loading="lazy">
+              <span class="gallery-category">${post.is_pinned ? '📌 고정' : post.is_notice ? '공지' : escapeHtml(post.category)}</span>
+            </div>
+          ` : ''}
           <div class="gallery-body">
+            ${firstImage ? '' : `<span class="gallery-category">${post.is_pinned ? '📌 고정' : post.is_notice ? '공지' : escapeHtml(post.category)}</span>`}
             <h3>${escapeHtml(post.title)}</h3>
             ${preview ? `<p>${escapeHtml(preview)}</p>` : ''}
             ${post.tags?.length ? `<div class="post-tags">${renderTags(post.tags)}</div>` : ''}
