@@ -181,7 +181,10 @@ a { color: inherit; text-decoration: none; }
 .editor-options { display: grid; gap: 8px; margin-top: 14px; }
 .editor-options .check-label { margin-top: 0; }
 .form-message { min-height: 18px; margin-top: 10px; color: var(--danger); font-size: 10px; }
+.viewer-share-message { margin-top: 10px; color: var(--danger); font-size: 10px; }
+.viewer-share-message:empty { display: none; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.viewer-actions { flex-wrap: wrap; }
 .viewer-meta { padding-bottom: 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 .viewer-tags { margin-top: 13px; }
 .viewer-tags .tag-chip { padding: 4px 8px; font-size: 9px; }
@@ -236,7 +239,7 @@ a { color: inherit; text-decoration: none; }
   .form-grid { grid-template-columns: 1fr; }
   .modal { padding: 10px; }
   .modal-panel { max-height: calc(100vh - 20px); padding: 19px 16px; border-radius: 14px; }
-  .viewer-actions .button { flex: 1; padding: 0 8px; }
+  .viewer-actions .button { flex: 1 1 calc(50% - 4px); padding: 0 8px; }
 }
 @media (max-width: 400px) {
   .post-table.is-gallery #postList { grid-template-columns: 1fr; }

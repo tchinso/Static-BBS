@@ -11,6 +11,9 @@ const viewModeStorageKey = 'nyangcatmemoBoardViewMode';
 const rememberLoginSettingKey = 'nyangcatmemoRememberLogin';
 const pageSize = 10;
 const maxImagesPerPost = 10;
+const shareTagPattern = /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z\d]{6}$/;
+const pendingSharedSearchStorageKey = 'nyangcatmemoPendingSharedSearch';
+const pendingSharedSearchMaxAge = 60 * 60 * 1000;
 
 let currentUser = null;
 let currentProfile = null;
@@ -45,7 +48,7 @@ function clearBoardState() {
   memberCount = null;
   currentPage = 1;
 
-  ['#postList', '#pagination', '#viewerTags', '#viewerImages', '#imageEditorList'].forEach((selector) => {
+  ['#postList', '#pagination', '#viewerTags', '#viewerImages', '#imageEditorList', '#shareLinkMessage'].forEach((selector) => {
     const element = $(selector);
     if (element) element.replaceChildren();
   });
@@ -138,6 +141,89 @@ function normalizeTags(value) {
   return [...new Set(source.map((tag) => String(tag).trim().replace(/^#+/, '')).filter(Boolean))]
     .slice(0, 8)
     .map((tag) => tag.slice(0, 24));
+}
+
+function isShareTag(value) {
+  return typeof value === 'string' && shareTagPattern.test(value);
+}
+
+function findShareTag(tags) {
+  return normalizeTags(tags).find((tag) => isShareTag(tag)) || null;
+}
+
+function sharedSearchTermFromLocation() {
+  const pathTag = window.location.pathname.replace(/^\/+|\/+$/g, '');
+  if (isShareTag(pathTag)) return pathTag;
+
+  // Keep older query-style links working while new links use the short path.
+  return new URLSearchParams(window.location.search).get('s')?.trim() || '';
+}
+
+function rememberSharedSearchTerm(value) {
+  if (!value) return;
+  try {
+    localStorage.setItem(pendingSharedSearchStorageKey, JSON.stringify({ value, savedAt: Date.now() }));
+  } catch {
+    // A direct, already-authenticated link still works when storage is unavailable.
+  }
+}
+
+function pendingSharedSearchTerm() {
+  try {
+    const raw = localStorage.getItem(pendingSharedSearchStorageKey);
+    if (!raw) return '';
+    const saved = JSON.parse(raw);
+    if (typeof saved?.value !== 'string' || !saved.value || !Number.isFinite(saved.savedAt)
+      || Date.now() - saved.savedAt > pendingSharedSearchMaxAge) {
+      localStorage.removeItem(pendingSharedSearchStorageKey);
+      return '';
+    }
+    return saved.value;
+  } catch {
+    return '';
+  }
+}
+
+function clearPendingSharedSearchTerm() {
+  try {
+    localStorage.removeItem(pendingSharedSearchStorageKey);
+  } catch {
+    // Storage cleanup is nonessential.
+  }
+}
+
+function hasMagicLinkSessionFragment() {
+  const fragment = new URLSearchParams(window.location.hash.slice(1));
+  return fragment.has('access_token') || fragment.has('refresh_token');
+}
+
+function prepareSharedSearch() {
+  const urlSearch = sharedSearchTermFromLocation();
+  if (urlSearch) rememberSharedSearchTerm(urlSearch);
+  // A pending link is only restored after the magic-link callback, so an
+  // abandoned link does not unexpectedly open during a later normal visit.
+  const search = urlSearch || (hasMagicLinkSessionFragment() ? pendingSharedSearchTerm() : '');
+  if (!search) return '';
+
+  selectedCategory = '전체글';
+  searchTerm = search;
+  currentPage = 1;
+  $('#searchInput').value = search;
+  $$('.nav-item').forEach((button) => button.classList.toggle('is-active', button.dataset.view === 'all'));
+  return search;
+}
+
+function preferredSearchResult(search) {
+  applyFilters();
+  if (isShareTag(search)) {
+    const exactTagMatch = filteredPosts.find((post) => normalizeTags(post.tags).includes(search));
+    if (exactTagMatch) return exactTagMatch;
+  }
+  return filteredPosts[0] || null;
+}
+
+function shareUrl(shareTag) {
+  return new URL(`/${shareTag}`, window.location.origin).toString();
 }
 
 function normalizeImagePaths(values) {
@@ -470,36 +556,85 @@ function closeDialog(dialogId) {
   dialog.close();
 }
 
+async function writeClipboardText(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall back for browsers that expose Clipboard API but deny its permission.
+    }
+  }
+
+  const temporaryField = document.createElement('textarea');
+  temporaryField.value = text;
+  temporaryField.setAttribute('readonly', '');
+  temporaryField.style.position = 'fixed';
+  temporaryField.style.opacity = '0';
+  document.body.append(temporaryField);
+  try {
+    temporaryField.select();
+    return document.execCommand('copy');
+  } finally {
+    temporaryField.remove();
+  }
+}
+
+function updateShareButton() {
+  const button = $('#sharePostButton');
+  const existingShareTag = findShareTag(selectedPost?.tags);
+  button.disabled = false;
+  button.textContent = existingShareTag ? '공유 링크 복사' : '공유 링크 생성 및 복사';
+}
+
+function updateSelectedPost(post) {
+  const updated = { ...post, image_urls: normalizeImagePaths(post.image_urls) };
+  const index = posts.findIndex((item) => String(item.id) === String(updated.id));
+  if (index >= 0) posts[index] = updated;
+  selectedPost = updated;
+}
+
 async function copySelectedPostContent() {
   if (!selectedPost) return;
-  const text = String(selectedPost.content || '');
   try {
-    let copied = false;
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(text);
-        copied = true;
-      } catch {
-        // Fall back for browsers that expose Clipboard API but deny its permission.
-      }
-    }
-    if (!copied) {
-      const temporaryField = document.createElement('textarea');
-      temporaryField.value = text;
-      temporaryField.setAttribute('readonly', '');
-      temporaryField.style.position = 'fixed';
-      temporaryField.style.opacity = '0';
-      document.body.append(temporaryField);
-      temporaryField.select();
-      copied = document.execCommand('copy');
-      temporaryField.remove();
-      if (!copied) throw new Error('Copy command failed');
-    }
+    if (!await writeClipboardText(String(selectedPost.content || ''))) throw new Error('Copy command failed');
     const button = $('#copyPostContentButton');
     button.textContent = '복사됨';
     setTimeout(() => { if (button) button.textContent = '내용 복사'; }, 1400);
   } catch {
     alert('내용을 복사하지 못했습니다. 직접 선택해 복사해주세요.');
+  }
+}
+
+async function copyPostShareLink() {
+  if (!selectedPost) return;
+
+  const button = $('#sharePostButton');
+  const message = $('#shareLinkMessage');
+  let shareTag = findShareTag(selectedPost.tags);
+  let link = shareTag ? shareUrl(shareTag) : '';
+  button.disabled = true;
+  message.textContent = '';
+
+  try {
+    if (!shareTag) {
+      button.textContent = '생성 중...';
+      const data = await api(`/api/posts/${encodeURIComponent(selectedPost.id)}/share`, { method: 'POST' });
+      if (!data.post || !isShareTag(data.shareTag)) throw new Error('공유 링크 정보를 확인하지 못했습니다.');
+      updateSelectedPost(data.post);
+      shareTag = data.shareTag;
+      link = typeof data.shareUrl === 'string' ? data.shareUrl : shareUrl(shareTag);
+      $('#viewerTags').innerHTML = renderTags(selectedPost.tags);
+      $('#viewerTags').hidden = normalizeTags(selectedPost.tags).length === 0;
+      renderAll();
+    }
+
+    if (!await writeClipboardText(link)) throw new Error('Copy command failed');
+    button.textContent = '복사됨';
+    setTimeout(() => updateShareButton(), 1400);
+  } catch (error) {
+    message.textContent = error.message || '공유 링크를 복사하지 못했습니다. 다시 시도해주세요.';
+    updateShareButton();
   }
 }
 
@@ -525,6 +660,8 @@ async function openViewer(id) {
   appendLinkedText($('#viewerContent'), selectedPost.content);
   $('#editPostButton').hidden = !canEdit(selectedPost);
   $('#deletePostButton').hidden = !canDelete(selectedPost);
+  $('#shareLinkMessage').textContent = '';
+  updateShareButton();
   $('#viewerDialog').showModal();
   renderAll();
 }
@@ -726,6 +863,7 @@ function bindEvents() {
   $('#editPostButton').addEventListener('click', () => openEditor(selectedPost));
   $('#deletePostButton').addEventListener('click', () => void deleteSelectedPost());
   $('#copyPostContentButton').addEventListener('click', () => void copySelectedPostContent());
+  $('#sharePostButton').addEventListener('click', () => void copyPostShareLink());
   $('#loginButton').addEventListener('click', () => currentUser ? openProfile() : openLogin());
   $('#gateLoginButton').addEventListener('click', openLogin);
   $('#loginForm').addEventListener('submit', submitLogin);
@@ -760,7 +898,7 @@ function bindEvents() {
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch((error) => console.warn('Service worker registration failed.', error));
+    navigator.serviceWorker.register('/sw.js').catch((error) => console.warn('Service worker registration failed.', error));
   });
 }
 
@@ -773,6 +911,7 @@ async function start() {
   $('#rememberLogin').checked = rememberLoginEnabled();
   bindEvents();
   registerServiceWorker();
+  const sharedSearch = prepareSharedSearch();
   try {
     const magicLink = await consumeMagicLink();
     if (magicLink?.errorCode) {
@@ -782,6 +921,9 @@ async function start() {
       return;
     }
     await loadBoard();
+    clearPendingSharedSearchTerm();
+    const post = sharedSearch ? preferredSearchResult(sharedSearch) : null;
+    if (post) await openViewer(post.id);
   } catch (error) {
     console.error(error);
     const message = error.status === 401 || error.status === 403

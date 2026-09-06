@@ -1,6 +1,11 @@
 import { supabaseJson } from './supabase.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SHARE_TAG_UPPERCASE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const SHARE_TAG_LOWERCASE = 'abcdefghijklmnopqrstuvwxyz';
+const SHARE_TAG_DIGITS = '0123456789';
+const SHARE_TAG_CHARACTERS = `${SHARE_TAG_UPPERCASE}${SHARE_TAG_LOWERCASE}${SHARE_TAG_DIGITS}`;
+const SHARE_TAG_LENGTH = 6;
 export const BOARD_CATEGORIES = Object.freeze([
   '현생',
   '링크',
@@ -37,6 +42,52 @@ export function cleanTags(value) {
     if (tag && !tags.includes(tag)) tags.push(tag);
   }
   return tags.length <= 8 ? tags : null;
+}
+
+// Share identifiers live in the existing tags array, so they must be
+// distinguishable from ordinary tags without adding a database column.
+export const SHARE_TAG_PATTERN = /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z\d]{6}$/;
+
+export function isShareTag(value) {
+  return typeof value === 'string' && SHARE_TAG_PATTERN.test(value);
+}
+
+export function findShareTag(tags) {
+  return (Array.isArray(tags) ? tags : []).find((tag) => isShareTag(tag)) || null;
+}
+
+function secureRandomIndex(maximum) {
+  if (!Number.isInteger(maximum) || maximum < 1) throw new Error('Invalid random range.');
+  const getRandomValues = globalThis.crypto?.getRandomValues;
+  if (typeof getRandomValues !== 'function') throw new Error('Secure randomness is unavailable.');
+
+  // Rejection sampling avoids modulo bias when the character set size does
+  // not divide the 32-bit random range.
+  const limit = Math.floor(0x100000000 / maximum) * maximum;
+  const values = new Uint32Array(1);
+  do {
+    getRandomValues.call(globalThis.crypto, values);
+  } while (values[0] >= limit);
+  return values[0] % maximum;
+}
+
+function randomCharacter(characters) {
+  return characters[secureRandomIndex(characters.length)];
+}
+
+export function generateShareTag() {
+  const characters = [
+    randomCharacter(SHARE_TAG_UPPERCASE),
+    randomCharacter(SHARE_TAG_LOWERCASE),
+    randomCharacter(SHARE_TAG_DIGITS),
+    ...Array.from({ length: SHARE_TAG_LENGTH - 3 }, () => randomCharacter(SHARE_TAG_CHARACTERS))
+  ];
+
+  for (let index = characters.length - 1; index > 0; index -= 1) {
+    const target = secureRandomIndex(index + 1);
+    [characters[index], characters[target]] = [characters[target], characters[index]];
+  }
+  return characters.join('');
 }
 
 function unproxyImagePath(value, env) {
@@ -248,6 +299,63 @@ export async function patchPost(env, id, fields) {
     body: fields
   });
   return { ok: result.response.ok, data: firstRow(result.data), detail: result.data };
+}
+
+async function patchPostIfUnchanged(env, post, fields) {
+  if (typeof post?.updated_at !== 'string' || !post.updated_at) return { ok: false, data: null };
+  const result = await supabaseJson(env, restQuery('community_posts', {
+    id: `eq.${post.id}`,
+    updated_at: `eq.${post.updated_at}`
+  }), {
+    method: 'PATCH',
+    headers: { Prefer: 'return=representation' },
+    body: fields
+  });
+  return { ok: result.response.ok, data: firstRow(result.data), detail: result.data };
+}
+
+async function shareTagExists(env, shareTag) {
+  const result = await supabaseJson(env, restQuery('community_posts', {
+    select: 'id',
+    tags: `cs.{${shareTag}}`,
+    limit: '1'
+  }));
+  if (!result.response.ok || !Array.isArray(result.data)) return null;
+  return result.data.length > 0;
+}
+
+export async function createPostShareLink(env, id) {
+  // Compare-and-swap on updated_at prevents a simultaneous share request or
+  // ordinary post edit from overwriting tags read by an earlier request.
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const post = await getPost(env, id);
+    if (!post) return { ok: false, reason: 'not_found' };
+
+    const existingShareTag = findShareTag(post.tags);
+    if (existingShareTag) {
+      return { ok: true, post, shareTag: existingShareTag, created: false };
+    }
+
+    const tags = cleanTags(post.tags);
+    if (!tags) return { ok: false, reason: 'invalid_tags' };
+    if (tags.length >= 8) return { ok: false, reason: 'tag_limit' };
+
+    // The tag column has no uniqueness constraint, so check generated values
+    // before saving. The large key space makes a retry exceptionally unlikely.
+    const shareTag = generateShareTag();
+    const alreadyUsed = await shareTagExists(env, shareTag);
+    if (alreadyUsed === null) return { ok: false, reason: 'lookup_failed' };
+    if (alreadyUsed) continue;
+
+    const patched = await patchPostIfUnchanged(env, post, {
+      tags: [...tags, shareTag],
+      updated_at: new Date().toISOString()
+    });
+    if (!patched.ok) return { ok: false, reason: 'save_failed', detail: patched.detail };
+    if (!patched.data) continue;
+    return { ok: true, post: presentPost(patched.data, env), shareTag, created: true };
+  }
+  return { ok: false, reason: 'retry_exhausted' };
 }
 
 function uniqueImagePaths(values, env) {
