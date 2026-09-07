@@ -28,6 +28,8 @@ let shortcutDeleteTarget = null;
 let bootStatusTimer = null;
 let bootRecoveryTimer = null;
 
+const STARTUP_AUTH_RETRY_DELAY_MS = 3000;
+
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -251,12 +253,13 @@ function createApiError(message, status) {
 }
 
 async function api(path, options = {}) {
+  const { deferUnauthorizedGate = false, ...requestOptions } = options;
   const response = await fetch(path, {
     credentials: 'same-origin',
-    ...options,
+    ...requestOptions,
     headers: {
-      ...(options.body instanceof FormData ? {} : options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(options.headers || {})
+      ...(requestOptions.body instanceof FormData ? {} : requestOptions.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(requestOptions.headers || {})
     }
   });
   const contentType = response.headers.get('content-type') || '';
@@ -264,7 +267,7 @@ async function api(path, options = {}) {
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
       clearBoardState();
-      setBoardVisibility(false);
+      if (!deferUnauthorizedGate) setBoardVisibility(false);
     }
     throw createApiError(body.error || body.message || '요청을 처리하지 못했습니다.', response.status);
   }
@@ -443,9 +446,19 @@ function isConfidential(post) {
   return Boolean(post?.is_confidential);
 }
 
-async function loadBoard() {
-  const data = await api('/api/bootstrap');
+async function loadBoard({ deferUnauthorizedGate = false } = {}) {
+  const data = await api('/api/bootstrap', { deferUnauthorizedGate });
   applyBoardData(data);
+}
+
+async function loadStartupBoard() {
+  try {
+    await loadBoard({ deferUnauthorizedGate: true });
+  } catch (error) {
+    if (error.status !== 401 && error.status !== 403) throw error;
+    await new Promise((resolve) => window.setTimeout(resolve, STARTUP_AUTH_RETRY_DELAY_MS));
+    await loadBoard({ deferUnauthorizedGate: true });
+  }
 }
 
 function applyBoardData(data) {
@@ -1590,7 +1603,7 @@ async function start() {
       return;
     }
     if (magicLink?.bootstrap) applyBoardData(magicLink.bootstrap);
-    else await loadBoard();
+    else await loadStartupBoard();
     clearPendingSharedSearchTerm();
     const post = sharedSearch ? preferredSearchResult(sharedSearch) : null;
     if (post) await openViewer(post.id);
