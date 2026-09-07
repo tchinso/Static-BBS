@@ -28,7 +28,11 @@ let shortcutDeleteTarget = null;
 let bootStatusTimer = null;
 let bootRecoveryTimer = null;
 
-const STARTUP_AUTH_RETRY_DELAY_MS = 3000;
+// Check immediately, then retry at 2.7 s and 5.4 s from startup.  The gate
+// changes to the recovery state at 8.1 s, after all three checks have had a
+// chance to run.
+const STARTUP_AUTH_RETRY_AT_MS = [2700, 5400];
+const STARTUP_AUTH_RECOVERY_TIMEOUT_MS = 8100;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -233,7 +237,7 @@ function showBootLoading() {
     $('#authGateProgress').hidden = true;
     $('#gateLoginButton').hidden = false;
     $('#authGateRetryButton').hidden = false;
-  }, 8000);
+  }, STARTUP_AUTH_RECOVERY_TIMEOUT_MS);
 }
 
 function setBoardVisibility(visible, message = '승인된 이메일로 로그인하면 게시판을 볼 수 있습니다.') {
@@ -452,13 +456,23 @@ async function loadBoard({ deferUnauthorizedGate = false } = {}) {
 }
 
 async function loadStartupBoard() {
-  try {
-    await loadBoard({ deferUnauthorizedGate: true });
-  } catch (error) {
-    if (error.status !== 401 && error.status !== 403) throw error;
-    await new Promise((resolve) => window.setTimeout(resolve, STARTUP_AUTH_RETRY_DELAY_MS));
-    await loadBoard({ deferUnauthorizedGate: true });
+  const startedAt = performance.now();
+  let lastUnauthorizedError = null;
+
+  for (const attemptAt of [0, ...STARTUP_AUTH_RETRY_AT_MS]) {
+    const waitMs = attemptAt - (performance.now() - startedAt);
+    if (waitMs > 0) await new Promise((resolve) => window.setTimeout(resolve, waitMs));
+
+    try {
+      await loadBoard({ deferUnauthorizedGate: true });
+      return;
+    } catch (error) {
+      if (error.status !== 401 && error.status !== 403) throw error;
+      lastUnauthorizedError = error;
+    }
   }
+
+  throw lastUnauthorizedError;
 }
 
 function applyBoardData(data) {
