@@ -107,9 +107,31 @@ create table if not exists public.community_profiles (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.community_categories (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique check (
+    name = btrim(name)
+    and char_length(name) between 1 and 60
+  ),
+  sort_order integer not null unique check (sort_order >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+insert into public.community_categories (name, sort_order)
+select initial_categories.name, initial_categories.sort_order
+from (values
+  ('현생', 0),
+  ('링크', 1),
+  ('언어/검색어', 2),
+  ('리소스/아이디어', 3),
+  ('쥬우니/에카하나', 4)
+) as initial_categories(name, sort_order)
+where not exists (select 1 from public.community_categories);
+
 create table if not exists public.community_posts (
   id uuid primary key default gen_random_uuid(),
-  category text not null default '현생' check (category in ('현생', '링크', '언어/검색어', '리소스/아이디어', '쥬우니/에카하나')),
+  category_id uuid not null references public.community_categories(id) on delete restrict,
   title text not null check (char_length(title) between 1 and 100),
   tags text[] not null default '{}',
   image_urls text[] not null default '{}',
@@ -128,27 +150,6 @@ create table if not exists public.community_posts (
 -- create table if not exists 는 기존 테이블에 새 열을 추가하지 않으므로 별도 migration을 둡니다.
 alter table public.community_profiles
   alter column role set default 'admin';
-
-do $$
-begin
-  if exists (
-    select 1
-    from public.community_posts
-    where category not in ('현생', '링크', '언어/검색어', '리소스/아이디어', '쥬우니/에카하나')
-  ) then
-    raise exception 'Legacy post categories need an explicit migration before the new category constraint can be applied.';
-  end if;
-end $$;
-
-alter table public.community_posts
-  alter column category set default '현생';
-
-alter table public.community_posts
-  drop constraint if exists community_posts_category_check;
-
-alter table public.community_posts
-  add constraint community_posts_category_check
-  check (category in ('현생', '링크', '언어/검색어', '리소스/아이디어', '쥬우니/에카하나'));
 
 alter table public.community_posts
   add column if not exists is_confidential boolean;
@@ -176,7 +177,7 @@ alter table public.community_posts
   alter column is_pinned set not null;
 
 create index if not exists community_posts_created_at_idx on public.community_posts(created_at desc);
-create index if not exists community_posts_category_idx on public.community_posts(category);
+create index if not exists community_posts_category_id_idx on public.community_posts(category_id);
 -- 인증 전 허용 목록 검사가 별도로 설정되어 있다는 전제에서, 새 사용자 프로필은 관리자입니다.
 -- 기존 프로필은 대량 승격하지 않습니다. 허용 목록을 관리하는 서버 측 절차로 승격하세요.
 create or replace function public.community_handle_new_user()
@@ -421,9 +422,204 @@ create trigger community_queue_post_images_on_delete
   after delete on public.community_posts
   for each row execute procedure public.community_queue_image_cleanup();
 
+-- Pages Functions call these with the service_role after checking the board
+-- session. They preserve category/post integrity even if two admin requests
+-- arrive at the same time.
+create or replace function public.community_create_category(category_name text)
+returns public.community_categories
+language plpgsql
+security invoker
+set search_path = pg_catalog, public
+as $$
+declare
+  normalized_name text := btrim(coalesce(category_name, ''));
+  created_category public.community_categories;
+begin
+  if char_length(normalized_name) not between 1 and 60 then
+    raise exception '카테고리 이름은 1~60자로 입력해주세요.' using errcode = '22023';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(74291, 2);
+  insert into public.community_categories (name, sort_order)
+  values (
+    normalized_name,
+    coalesce((select max(sort_order) + 1 from public.community_categories), 0)
+  )
+  returning * into created_category;
+  return created_category;
+exception
+  when unique_violation then
+    raise exception '같은 이름의 카테고리가 이미 있습니다.' using errcode = '23505';
+end;
+$$;
+
+create or replace function public.community_rename_category(
+  category_id_value uuid,
+  category_name text
+)
+returns public.community_categories
+language plpgsql
+security invoker
+set search_path = pg_catalog, public
+as $$
+declare
+  normalized_name text := btrim(coalesce(category_name, ''));
+  renamed_category public.community_categories;
+begin
+  if char_length(normalized_name) not between 1 and 60 then
+    raise exception '카테고리 이름은 1~60자로 입력해주세요.' using errcode = '22023';
+  end if;
+
+  update public.community_categories
+  set name = normalized_name,
+      updated_at = now()
+  where id = category_id_value
+  returning * into renamed_category;
+
+  if not found then
+    raise exception '카테고리를 찾을 수 없습니다.' using errcode = 'P0002';
+  end if;
+  return renamed_category;
+exception
+  when unique_violation then
+    raise exception '같은 이름의 카테고리가 이미 있습니다.' using errcode = '23505';
+end;
+$$;
+
+create or replace function public.community_reorder_categories(category_ids_value uuid[])
+returns setof public.community_categories
+language plpgsql
+security invoker
+set search_path = pg_catalog, public
+as $$
+begin
+  perform pg_catalog.pg_advisory_xact_lock(74291, 2);
+
+  if category_ids_value is null
+    or cardinality(category_ids_value) <> (select count(*) from public.community_categories) then
+    raise exception '카테고리 목록을 다시 불러온 뒤 순서를 변경해주세요.' using errcode = '22023';
+  end if;
+
+  if (select count(*) from (select distinct id from unnest(category_ids_value) as item(id)) as unique_ids)
+      <> cardinality(category_ids_value) then
+    raise exception '카테고리 목록에 중복이 있습니다.' using errcode = '22023';
+  end if;
+
+  if exists (
+    select 1
+    from unnest(category_ids_value) as item(id)
+    left join public.community_categories as category on category.id = item.id
+    where category.id is null
+  ) then
+    raise exception '카테고리 목록을 다시 불러온 뒤 순서를 변경해주세요.' using errcode = '22023';
+  end if;
+
+  -- A two-pass update preserves the unique sort_order constraint while the
+  -- requested order swaps adjacent rows.
+  update public.community_categories
+  set sort_order = sort_order + 1000000;
+
+  with requested_order as (
+    select id, (ordinal_position - 1)::integer as sort_order
+    from unnest(category_ids_value) with ordinality as item(id, ordinal_position)
+  )
+  update public.community_categories as category
+  set sort_order = requested_order.sort_order,
+      updated_at = now()
+  from requested_order
+  where category.id = requested_order.id;
+
+  return query
+  select category.*
+  from public.community_categories as category
+  order by category.sort_order, category.name;
+end;
+$$;
+
+create or replace function public.community_delete_category(
+  category_id_value uuid,
+  replacement_category_id_value uuid default null
+)
+returns table (deleted_category_id uuid, reassigned_post_count integer)
+language plpgsql
+security invoker
+set search_path = pg_catalog, public
+as $$
+declare
+  posts_to_move integer := 0;
+  category_total integer := 0;
+begin
+  perform pg_catalog.pg_advisory_xact_lock(74291, 2);
+
+  select count(*) into category_total from public.community_categories;
+  if category_total <= 1 then
+    raise exception '카테고리는 하나 이상 남겨야 합니다.' using errcode = 'P0001';
+  end if;
+
+  -- This lock also prevents a concurrent post from being attached to the
+  -- category between its count check and deletion.
+  perform 1
+  from public.community_categories
+  where id = category_id_value
+  for update;
+  if not found then
+    raise exception '카테고리를 찾을 수 없습니다.' using errcode = 'P0002';
+  end if;
+
+  select count(*) into posts_to_move
+  from public.community_posts
+  where category_id = category_id_value;
+
+  if posts_to_move > 0 then
+    if replacement_category_id_value is null then
+      raise exception '이 카테고리에는 게시글이 %개 있습니다. 이동할 카테고리를 선택해주세요.', posts_to_move
+        using errcode = 'P0001';
+    end if;
+    if replacement_category_id_value = category_id_value then
+      raise exception '다른 카테고리를 선택해주세요.' using errcode = '22023';
+    end if;
+
+    perform 1
+    from public.community_categories
+    where id = replacement_category_id_value
+    for update;
+    if not found then
+      raise exception '이동할 카테고리를 찾을 수 없습니다.' using errcode = 'P0002';
+    end if;
+
+    update public.community_posts
+    set category_id = replacement_category_id_value,
+        updated_at = now()
+    where category_id = category_id_value;
+  end if;
+
+  delete from public.community_categories
+  where id = category_id_value;
+
+  update public.community_categories
+  set sort_order = sort_order + 1000000;
+
+  with ordered_categories as (
+    select id, (row_number() over (order by sort_order, name) - 1)::integer as sort_order
+    from public.community_categories
+  )
+  update public.community_categories as category
+  set sort_order = ordered_categories.sort_order,
+      updated_at = now()
+  from ordered_categories
+  where category.id = ordered_categories.id;
+
+  return query select category_id_value, posts_to_move;
+end;
+$$;
+
 alter table public.community_profiles enable row level security;
+alter table public.community_categories enable row level security;
 alter table public.community_posts enable row level security;
 alter table public.community_image_cleanup_queue enable row level security;
+
+revoke all on table public.community_categories from public, anon, authenticated;
+grant select, insert, update, delete on table public.community_categories to service_role;
 
 revoke all on table public.community_image_cleanup_queue from public, anon, authenticated;
 grant select, insert, update, delete on table public.community_image_cleanup_queue to service_role;
@@ -486,10 +682,18 @@ revoke all on function public.community_has_board_role(text[]) from public, anon
 revoke all on function public.community_increment_post_views(uuid) from public, anon;
 revoke all on function public.community_enforce_pinned_post_limit() from public, anon, authenticated;
 revoke all on function public.community_queue_image_cleanup() from public, anon, authenticated;
+revoke all on function public.community_create_category(text) from public, anon, authenticated;
+revoke all on function public.community_rename_category(uuid, text) from public, anon, authenticated;
+revoke all on function public.community_reorder_categories(uuid[]) from public, anon, authenticated;
+revoke all on function public.community_delete_category(uuid, uuid) from public, anon, authenticated;
 
 grant execute on function public.community_has_board_role(text[]) to authenticated;
 grant execute on function public.community_email_is_allowed() to authenticated;
 grant execute on function public.community_increment_post_views(uuid) to authenticated;
+grant execute on function public.community_create_category(text) to service_role;
+grant execute on function public.community_rename_category(uuid, text) to service_role;
+grant execute on function public.community_reorder_categories(uuid[]) to service_role;
+grant execute on function public.community_delete_category(uuid, uuid) to service_role;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values (

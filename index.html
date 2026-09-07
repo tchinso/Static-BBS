@@ -38,14 +38,7 @@
   </header>
 
   <div class="community-nav" aria-label="주요 메뉴">
-    <div class="header-inner nav-inner">
-      <button class="nav-item is-active" type="button" data-view="all">전체글</button>
-      <button class="nav-item" type="button" data-category="현생">현생</button>
-      <button class="nav-item" type="button" data-category="링크">링크</button>
-      <button class="nav-item" type="button" data-category="언어/검색어">언어/검색어</button>
-      <button class="nav-item" type="button" data-category="리소스/아이디어">리소스/아이디어</button>
-      <button class="nav-item" type="button" data-category="쥬우니/에카하나">쥬우니/에카하나</button>
-    </div>
+    <div class="header-inner nav-inner" id="categoryNav"></div>
   </div>
 
   <main class="page-shell">
@@ -177,23 +170,52 @@
   </dialog>
 
   <dialog class="modal" id="profileDialog">
-    <form class="modal-panel profile-form" id="profileForm" method="dialog">
+    <section class="modal-panel profile-settings-panel" aria-labelledby="profileSettingsTitle">
       <div class="modal-header">
-        <div><span class="eyebrow">PROFILE</span><h2>작성자 프로필</h2></div>
+        <div><span class="eyebrow">PROFILE &amp; SETTINGS</span><h2 id="profileSettingsTitle">프로필 / 설정</h2></div>
         <button class="icon-button" type="button" data-close-dialog="profileDialog" aria-label="닫기">×</button>
       </div>
-      <p>이름을 바꾸면 이전에 작성한 글의 작성자 이름도 함께 변경됩니다.</p>
-      <label>이메일<input id="profileEmail" type="email" readonly></label>
-      <label>작성자 이름<input id="profileDisplayName" maxlength="20" placeholder="표시할 이름" required></label>
-      <div class="profile-role">회원 등급 <strong id="profileRole">admin</strong></div>
-      <div class="form-message" id="profileMessage" role="status"></div>
-      <div class="modal-actions profile-actions">
-        <button class="button button-danger" id="profileLogoutButton" type="button">로그아웃</button>
-        <span></span>
-        <button class="button button-ghost" type="button" data-close-dialog="profileDialog">취소</button>
-        <button class="button button-primary" type="submit">프로필 저장</button>
-      </div>
-    </form>
+      <form class="profile-form" id="profileForm" method="dialog">
+        <p>이름을 바꾸면 이전에 작성한 글의 작성자 이름도 함께 변경됩니다.</p>
+        <label>이메일<input id="profileEmail" type="email" readonly></label>
+        <label>작성자 이름<input id="profileDisplayName" maxlength="20" placeholder="표시할 이름" required></label>
+        <div class="profile-role">회원 등급 <strong id="profileRole">admin</strong></div>
+        <div class="form-message" id="profileMessage" role="status"></div>
+        <div class="modal-actions profile-actions">
+          <button class="button button-danger" id="profileLogoutButton" type="button">로그아웃</button>
+          <span></span>
+          <button class="button button-primary" type="submit">프로필 저장</button>
+        </div>
+      </form>
+
+      <section class="category-settings" id="categorySettings" hidden aria-labelledby="categorySettingsTitle">
+        <div class="category-settings-heading">
+          <div>
+            <span class="eyebrow">CATEGORIES</span>
+            <h3 id="categorySettingsTitle">카테고리 관리</h3>
+          </div>
+          <span class="category-settings-help">순서를 바꾸거나 이름을 편집할 수 있어요.</span>
+        </div>
+        <form class="category-add-form" id="categoryAddForm">
+          <label class="sr-only" for="categoryNameInput">새 카테고리 이름</label>
+          <input id="categoryNameInput" maxlength="60" placeholder="새 카테고리 이름" required>
+          <button class="button button-primary" type="submit">추가</button>
+        </form>
+        <div class="category-list" id="categoryList" aria-live="polite"></div>
+        <section class="category-delete-panel" id="categoryDeletePanel" hidden aria-live="polite">
+          <strong id="categoryDeleteTitle"></strong>
+          <p id="categoryDeleteNotice"></p>
+          <label id="categoryReplacementField" hidden>게시글을 이동할 카테고리
+            <select id="categoryReplacementSelect"></select>
+          </label>
+          <div class="category-delete-actions">
+            <button class="button button-ghost" id="categoryDeleteCancelButton" type="button">취소</button>
+            <button class="button button-danger" id="categoryDeleteConfirmButton" type="button">카테고리 삭제</button>
+          </div>
+        </section>
+        <div class="form-message" id="categoryMessage" role="status"></div>
+      </section>
+    </section>
   </dialog>
 
   <script src="/config.js"></script>

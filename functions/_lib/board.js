@@ -6,13 +6,7 @@ const SHARE_TAG_LOWERCASE = 'abcdefghijklmnopqrstuvwxyz';
 const SHARE_TAG_DIGITS = '0123456789';
 const SHARE_TAG_CHARACTERS = `${SHARE_TAG_UPPERCASE}${SHARE_TAG_LOWERCASE}${SHARE_TAG_DIGITS}`;
 const SHARE_TAG_LENGTH = 6;
-export const BOARD_CATEGORIES = Object.freeze([
-  '현생',
-  '링크',
-  '언어/검색어',
-  '리소스/아이디어',
-  '쥬우니/에카하나'
-]);
+const POST_SELECT = '*,community_categories(id,name)';
 
 function restQuery(table, query) {
   return `/rest/v1/${table}?${new URLSearchParams(query).toString()}`;
@@ -143,11 +137,24 @@ export function imageProxyUrl(path) {
 }
 
 export function presentPost(post, env) {
+  const categoryRelation = Array.isArray(post?.community_categories)
+    ? post.community_categories[0]
+    : post?.community_categories;
+  const categoryName = typeof categoryRelation?.name === 'string' && categoryRelation.name
+    ? categoryRelation.name
+    : typeof post?.category === 'string'
+      ? post.category
+      : '';
   const imagePaths = Array.isArray(post?.image_urls)
     ? post.image_urls.map((value) => validImagePath(value, env)).filter(Boolean)
     : [];
   return {
     ...post,
+    category_name: categoryName,
+    // Keep this alias while older clients are still cached. The authoritative
+    // relationship is category_id -> community_categories.
+    category: categoryName,
+    community_categories: undefined,
     image_urls: imagePaths,
     image_proxy_urls: imagePaths.map(imageProxyUrl)
   };
@@ -206,7 +213,7 @@ export async function updateDisplayName(env, userId, displayName) {
 
 export async function listPosts(env) {
   const result = await supabaseJson(env, restQuery('community_posts', {
-    select: '*',
+    select: POST_SELECT,
     order: 'is_pinned.desc,pin_slot.asc.nullslast,is_notice.desc,created_at.desc'
   }));
   if (!result.response.ok || !Array.isArray(result.data)) throw new Error('Post lookup failed.');
@@ -214,7 +221,7 @@ export async function listPosts(env) {
 }
 
 export async function getPost(env, id) {
-  const result = await supabaseJson(env, restQuery('community_posts', { select: '*', id: `eq.${id}` }));
+  const result = await supabaseJson(env, restQuery('community_posts', { select: POST_SELECT, id: `eq.${id}` }));
   if (!result.response.ok) throw new Error('Post lookup failed.');
   const post = firstRow(result.data);
   return post ? presentPost(post, env) : null;
@@ -242,10 +249,10 @@ export function makePostFields(body, env, { creating = false, profile = null, us
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { error: '요청 내용을 확인해주세요.' };
   const fields = {};
 
-  if (creating || 'category' in body) {
-    const category = cleanText(body.category, { min: 1, max: 60 });
-    if (!category || !BOARD_CATEGORIES.includes(category)) return { error: '분류를 확인해주세요.' };
-    fields.category = category;
+  if (creating || 'category_id' in body) {
+    const categoryId = body.category_id;
+    if (!isUuid(categoryId)) return { error: '분류를 확인해주세요.' };
+    fields.category_id = categoryId;
   }
   if (creating || 'title' in body) {
     const title = cleanText(body.title, { min: 1, max: 100 });
@@ -353,7 +360,11 @@ export async function createPostShareLink(env, id) {
     });
     if (!patched.ok) return { ok: false, reason: 'save_failed', detail: patched.detail };
     if (!patched.data) continue;
-    return { ok: true, post: presentPost(patched.data, env), shareTag, created: true };
+    // A mutation response contains only post columns, not the embedded
+    // category relation used for the display label. Read it once more so a
+    // recently renamed category is represented accurately in the viewer.
+    const updatedPost = await getPost(env, id);
+    return { ok: true, post: updatedPost || presentPost(patched.data, env), shareTag, created: true };
   }
   return { ok: false, reason: 'retry_exhausted' };
 }

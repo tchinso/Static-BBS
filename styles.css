@@ -157,10 +157,10 @@ a { color: inherit; text-decoration: none; }
 .modal-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 20px; }
 .modal-header h2 { margin: 0; font-size: 19px; line-height: 1.35; }
 .icon-button { display: grid; place-items: center; flex: 0 0 auto; width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 50%; color: #79818d; background: #fff; font-size: 19px; cursor: pointer; }
-.editor-form label, .login-form label, .profile-form label { display: grid; gap: 7px; margin-top: 14px; color: #69717c; font-size: 10px; font-weight: 800; }
+.editor-form label, .login-form label, .profile-form label, .category-delete-panel label { display: grid; gap: 7px; margin-top: 14px; color: #69717c; font-size: 10px; font-weight: 800; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form-grid label { margin-top: 0; }
-.editor-form input, .editor-form textarea, .editor-form select, .login-form input, .profile-form input { width: 100%; padding: 11px 12px; border: 1px solid #dce0e5; border-radius: 10px; outline: 0; color: var(--ink); background: #fff; font-size: 12px; font-weight: 500; }
+.editor-form input, .editor-form textarea, .editor-form select, .login-form input, .profile-form input, .category-add-form input, .category-rename-form input, .category-delete-panel select { width: 100%; padding: 11px 12px; border: 1px solid #dce0e5; border-radius: 10px; outline: 0; color: var(--ink); background: #fff; font-size: 12px; font-weight: 500; }
 .profile-form input[readonly] { color: #8b929c; background: #f5f6f8; }
 .editor-form textarea { resize: vertical; line-height: 1.75; }
 .editor-form input[type="file"] { padding: 8px; background: #fafbfc; }
@@ -175,7 +175,7 @@ a { color: inherit; text-decoration: none; }
 .image-order { position: absolute; z-index: 1; top: 5px; left: 5px; display: grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; color: #fff; background: rgba(30,34,40,.78); font-size: 8px; font-weight: 800; }
 .image-editor-item.is-pending { display: flex; align-items: center; min-height: 72px; padding: 9px; aspect-ratio: auto; }
 .pending-image-name { overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.editor-form input:focus, .editor-form textarea:focus, .editor-form select:focus, .login-form input:focus, .profile-form input:focus { border-color: #969eaa; box-shadow: 0 0 0 3px #f0f1f3; }
+.editor-form input:focus, .editor-form textarea:focus, .editor-form select:focus, .login-form input:focus, .profile-form input:focus, .category-add-form input:focus, .category-rename-form input:focus, .category-delete-panel select:focus { border-color: #969eaa; box-shadow: 0 0 0 3px #f0f1f3; }
 .check-label { display: flex !important; grid-template-columns: auto 1fr; align-items: center; justify-content: flex-start; }
 .check-label input { width: 15px; }
 .editor-options { display: grid; gap: 8px; margin-top: 14px; }
@@ -200,6 +200,33 @@ a { color: inherit; text-decoration: none; }
 .profile-role strong { margin-left: 6px; color: var(--ink); }
 .profile-actions { align-items: center; }
 .profile-actions span { flex: 1; }
+.profile-settings-panel { width: min(760px, 100%); }
+.profile-settings-panel .profile-form { width: 100%; }
+.category-settings { margin-top: 25px; padding-top: 22px; border-top: 1px solid var(--line); }
+.category-settings-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.category-settings-heading .eyebrow { margin-bottom: 5px; }
+.category-settings-heading h3 { margin: 0; font-size: 15px; letter-spacing: -.03em; }
+.category-settings-help { color: var(--muted); font-size: 10px; line-height: 1.5; text-align: right; }
+.category-add-form { display: flex; gap: 8px; margin-top: 14px; }
+.category-add-form input { min-width: 0; }
+.category-add-form .button { flex: 0 0 auto; }
+.category-list { display: grid; gap: 8px; margin-top: 13px; }
+.category-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; padding: 10px 11px; border: 1px solid #e5e8ec; border-radius: 11px; background: #fafbfc; }
+.category-row-main { min-width: 0; }
+.category-row-main strong, .category-row-main span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.category-row-main strong { font-size: 12px; }
+.category-row-main span { margin-top: 4px; color: #8a929d; font-size: 9px; }
+.category-row-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.category-row-actions .button, .category-rename-form .button { min-height: 30px; padding: 0 9px; border-radius: 8px; font-size: 9px; }
+.category-rename-form { display: flex; align-items: center; gap: 6px; }
+.category-rename-form input { min-width: 130px; padding: 8px 9px; }
+.category-empty { margin: 0; padding: 16px 8px; color: #8b929d; font-size: 10px; text-align: center; }
+.category-delete-panel { margin-top: 13px; padding: 13px; border: 1px solid #f0cbd0; border-radius: 11px; background: #fff8f8; }
+.category-delete-panel strong { display: block; color: #8e3640; font-size: 11px; }
+.category-delete-panel p { margin: 7px 0 0; color: #9a5860; font-size: 10px; line-height: 1.65; }
+.category-delete-panel label { margin-top: 12px; }
+.category-delete-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
+.category-delete-actions .button { min-height: 32px; padding: 0 10px; font-size: 10px; }
 
 @media (max-width: 999px) {
   .post-table.is-gallery #postList { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -240,6 +267,12 @@ a { color: inherit; text-decoration: none; }
   .modal { padding: 10px; }
   .modal-panel { max-height: calc(100vh - 20px); padding: 19px 16px; border-radius: 14px; }
   .viewer-actions .button { flex: 1 1 calc(50% - 4px); padding: 0 8px; }
+  .category-settings-heading { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .category-settings-help { text-align: left; }
+  .category-row { align-items: flex-start; flex-direction: column; }
+  .category-row-actions { justify-content: flex-start; }
+  .category-rename-form { flex-wrap: wrap; }
+  .category-rename-form input { flex: 1 1 100%; }
 }
 @media (max-width: 400px) {
   .post-table.is-gallery #postList { grid-template-columns: 1fr; }

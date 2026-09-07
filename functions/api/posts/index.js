@@ -35,6 +35,8 @@ export async function onRequestPost(context) {
     const created = await createPost(context.env, prepared.fields);
     if (!created.ok) {
       if (pinLimitError(created.detail)) return json({ error: '상단 고정 글은 최대 2개까지만 설정할 수 있습니다.' }, 409);
+      const detail = Array.isArray(created.detail) ? created.detail[0] : created.detail;
+      if (detail?.code === '23503') return badRequest('분류를 확인해주세요.');
       return json({ error: '글을 저장하지 못했습니다. 잠시 후 다시 시도해주세요.' }, 502);
     }
     return json({ post: presentPost(created.data, context.env) }, 201, auth.setCookie ? { 'Set-Cookie': auth.setCookie } : undefined);

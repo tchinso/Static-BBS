@@ -1,11 +1,3 @@
-const categories = [
-  { name: '현생', icon: '현생' },
-  { name: '링크', icon: '링크' },
-  { name: '언어/검색어', icon: '언어' },
-  { name: '리소스/아이디어', icon: '리소스' },
-  { name: '쥬우니/에카하나', icon: '쥬우니' }
-];
-
 const boardConfig = window.BOARD_CONFIG || {};
 const viewModeStorageKey = 'nyangcatmemoBoardViewMode';
 const rememberLoginSettingKey = 'nyangcatmemoRememberLogin';
@@ -17,6 +9,7 @@ const pendingSharedSearchMaxAge = 60 * 60 * 1000;
 
 let currentUser = null;
 let currentProfile = null;
+let categories = [];
 let posts = [];
 let filteredPosts = [];
 let selectedCategory = '전체글';
@@ -28,6 +21,8 @@ let editorImages = [];
 let editorIsDirty = false;
 let draggedImageIndex = null;
 let memberCount = null;
+let editingCategoryId = null;
+let categoryDeleteTarget = null;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -39,6 +34,7 @@ const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 function clearBoardState() {
   currentUser = null;
   currentProfile = null;
+  categories = [];
   posts = [];
   filteredPosts = [];
   selectedPost = null;
@@ -46,9 +42,13 @@ function clearBoardState() {
   editorIsDirty = false;
   draggedImageIndex = null;
   memberCount = null;
+  editingCategoryId = null;
+  categoryDeleteTarget = null;
   currentPage = 1;
+  selectedCategory = '전체글';
+  searchTerm = '';
 
-  ['#postList', '#pagination', '#viewerTags', '#viewerImages', '#imageEditorList', '#shareLinkMessage'].forEach((selector) => {
+  ['#categoryNav', '#postCategory', '#categoryList', '#postList', '#pagination', '#viewerTags', '#viewerImages', '#imageEditorList', '#shareLinkMessage'].forEach((selector) => {
     const element = $(selector);
     if (element) element.replaceChildren();
   });
@@ -73,6 +73,10 @@ function clearBoardState() {
   if (profileEmail) profileEmail.value = '';
   const profileDisplayName = $('#profileDisplayName');
   if (profileDisplayName) profileDisplayName.value = '';
+  const categoryDeletePanel = $('#categoryDeletePanel');
+  if (categoryDeletePanel) categoryDeletePanel.hidden = true;
+  const categoryMessage = $('#categoryMessage');
+  if (categoryMessage) categoryMessage.textContent = '';
 }
 
 function escapeHtml(value) {
@@ -82,6 +86,61 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function normalizeCategories(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((category) => ({
+      id: String(category?.id ?? '').trim(),
+      name: String(category?.name ?? '').trim(),
+      sort_order: Number(category?.sort_order ?? 0),
+      post_count: Math.max(0, Number(category?.post_count ?? 0) || 0)
+    }))
+    .filter((category) => category.id && category.name)
+    .sort((left, right) => left.sort_order - right.sort_order || left.name.localeCompare(right.name, 'ko'));
+}
+
+function categoryById(id) {
+  return categories.find((category) => category.id === String(id ?? '')) || null;
+}
+
+function categoryIdByName(name) {
+  return categories.find((category) => category.name === String(name ?? ''))?.id || '';
+}
+
+function postCategoryRelation(post) {
+  const relation = post?.category;
+  return Array.isArray(relation) ? relation[0] : relation;
+}
+
+function normalizePost(post) {
+  const relation = postCategoryRelation(post);
+  const categoryId = String(post?.category_id ?? relation?.id ?? categoryIdByName(post?.category_name ?? (typeof relation === 'string' ? relation : ''))).trim();
+  const categoryName = String(
+    post?.category_name
+    ?? relation?.name
+    ?? (typeof relation === 'string' ? relation : null)
+    ?? categoryById(categoryId)?.name
+    ?? ''
+  ).trim();
+  return {
+    ...post,
+    category_id: categoryId,
+    category: categoryName,
+    image_urls: normalizeImagePaths(post?.image_urls)
+  };
+}
+
+function isAllCategoriesSelected() {
+  return selectedCategory === '전체글';
+}
+
+function selectedCategoryName() {
+  return categoryById(selectedCategory)?.name || '';
+}
+
+function reconcileSelectedCategory() {
+  if (!isAllCategoriesSelected() && !categoryById(selectedCategory)) selectedCategory = '전체글';
 }
 
 function rememberLoginEnabled() {
@@ -297,11 +356,10 @@ async function loadBoard() {
   const data = await api('/api/bootstrap');
   currentUser = data.user || null;
   currentProfile = data.profile || null;
-  posts = (data.posts || []).map((post) => ({
-    ...post,
-    image_urls: normalizeImagePaths(post.image_urls)
-  }));
+  categories = normalizeCategories(data.categories);
+  posts = (data.posts || []).map(normalizePost);
   memberCount = Number.isFinite(data.memberCount) ? data.memberCount : null;
+  reconcileSelectedCategory();
   setBoardVisibility(true);
   renderAll();
 }
@@ -309,7 +367,9 @@ async function loadBoard() {
 function applyFilters() {
   const query = searchTerm.toLocaleLowerCase('ko');
   filteredPosts = posts.filter((post) => {
-    const categoryMatch = selectedCategory === '전체글' || post.category === selectedCategory;
+    const categoryMatch = isAllCategoriesSelected()
+      || post.category_id === selectedCategory
+      || (!post.category_id && post.category === selectedCategoryName());
     const textMatch = !query || `${post.title} ${post.content} ${post.author_name} ${(post.tags || []).join(' ')}`.toLocaleLowerCase('ko').includes(query);
     return categoryMatch && textMatch;
   });
@@ -457,24 +517,124 @@ function renderPagination(totalPages) {
     .join('');
 }
 
+function renderCategoryNavigation() {
+  const navigation = $('#categoryNav');
+  if (!navigation) return;
+  navigation.innerHTML = `
+    <button class="nav-item ${isAllCategoriesSelected() ? 'is-active' : ''}" type="button" data-view="all">전체글</button>
+    ${categories.map((category) => `
+      <button class="nav-item ${selectedCategory === category.id ? 'is-active' : ''}" type="button" data-category-id="${escapeHtml(category.id)}">${escapeHtml(category.name)}</button>
+    `).join('')}
+  `;
+}
+
+function renderPostCategoryOptions() {
+  const select = $('#postCategory');
+  if (!select) return;
+  const selectedValue = select.value;
+  select.innerHTML = categories
+    .map((category) => `<option value="${escapeHtml(category.id)}">${escapeHtml(category.name)}</option>`)
+    .join('');
+  if (categoryById(selectedValue)) select.value = selectedValue;
+}
+
+function renderCategoryDeletePanel() {
+  const panel = $('#categoryDeletePanel');
+  if (!panel) return;
+  const target = categoryById(categoryDeleteTarget);
+  if (!target) {
+    categoryDeleteTarget = null;
+    panel.hidden = true;
+    return;
+  }
+
+  const otherCategories = categories.filter((category) => category.id !== target.id);
+  const hasPosts = target.post_count > 0;
+  const title = $('#categoryDeleteTitle');
+  const notice = $('#categoryDeleteNotice');
+  const replacementField = $('#categoryReplacementField');
+  const replacementSelect = $('#categoryReplacementSelect');
+  const confirmButton = $('#categoryDeleteConfirmButton');
+
+  title.textContent = `“${target.name}” 카테고리 삭제`;
+  if (hasPosts) {
+    notice.textContent = `이 카테고리에는 게시글 ${target.post_count.toLocaleString('ko-KR')}개가 있습니다. 삭제하기 전에 모든 게시글을 다른 카테고리로 이동해야 합니다.`;
+    replacementField.hidden = false;
+    replacementSelect.innerHTML = `
+      <option value="">이동할 카테고리를 선택하세요</option>
+      ${otherCategories.map((category) => `<option value="${escapeHtml(category.id)}">${escapeHtml(category.name)}</option>`).join('')}
+    `;
+  } else {
+    notice.textContent = otherCategories.length
+      ? '게시글이 없는 카테고리입니다. 삭제한 뒤에는 되돌릴 수 없습니다.'
+      : '마지막 카테고리는 삭제할 수 없습니다.';
+    replacementField.hidden = true;
+    replacementSelect.replaceChildren();
+  }
+  confirmButton.disabled = otherCategories.length === 0 || (hasPosts && !replacementSelect.value);
+  panel.hidden = false;
+}
+
+function renderCategoryManager() {
+  const settings = $('#categorySettings');
+  const list = $('#categoryList');
+  if (!settings || !list) return;
+  const canManage = roleIsAdmin();
+  settings.hidden = !canManage;
+  if (!canManage) return;
+
+  if (editingCategoryId && !categoryById(editingCategoryId)) editingCategoryId = null;
+  list.innerHTML = categories.map((category, index) => {
+    const isEditing = editingCategoryId === category.id;
+    return `
+      <article class="category-row" data-category-id="${escapeHtml(category.id)}">
+        <div class="category-row-main">
+          ${isEditing ? `
+            <form class="category-rename-form" data-category-rename-form data-category-id="${escapeHtml(category.id)}">
+              <label class="sr-only" for="categoryRename-${escapeHtml(category.id)}">카테고리 이름</label>
+              <input id="categoryRename-${escapeHtml(category.id)}" name="name" maxlength="60" value="${escapeHtml(category.name)}" required>
+              <button class="button button-primary" type="submit">저장</button>
+              <button class="button button-ghost" type="button" data-category-cancel-rename>취소</button>
+            </form>
+          ` : `
+            <strong>${escapeHtml(category.name)}</strong>
+            <span>게시글 ${category.post_count.toLocaleString('ko-KR')}개</span>
+          `}
+        </div>
+        ${isEditing ? '' : `
+          <div class="category-row-actions" role="group" aria-label="${escapeHtml(category.name)} 카테고리 관리">
+            <button class="button button-ghost" type="button" data-category-move="up" ${index === 0 ? 'disabled' : ''}>위로</button>
+            <button class="button button-ghost" type="button" data-category-move="down" ${index === categories.length - 1 ? 'disabled' : ''}>아래로</button>
+            <button class="button button-ghost" type="button" data-category-rename>이름 변경</button>
+            <button class="button button-danger" type="button" data-category-delete>삭제</button>
+          </div>
+        `}
+      </article>
+    `;
+  }).join('') || '<p class="category-empty">등록된 카테고리가 없습니다. 새 카테고리를 추가해주세요.</p>';
+  renderCategoryDeletePanel();
+}
+
 function renderHeader() {
-  $('#boardTitle').textContent = searchTerm ? `'${searchTerm}' 검색 결과` : selectedCategory === '전체글' ? '전체글보기' : selectedCategory;
-  $('#boardEyebrow').textContent = searchTerm ? 'SEARCH RESULT' : selectedCategory === '전체글' ? 'ALL POSTS' : 'CATEGORY';
-  $('#loginButton').textContent = currentUser ? `${currentProfile?.display_name || '관리자'} · 프로필` : '로그인';
+  const categoryName = selectedCategoryName();
+  $('#boardTitle').textContent = searchTerm ? `'${searchTerm}' 검색 결과` : isAllCategoriesSelected() ? '전체글보기' : categoryName;
+  $('#boardEyebrow').textContent = searchTerm ? 'SEARCH RESULT' : isAllCategoriesSelected() ? 'ALL POSTS' : 'CATEGORY';
+  $('#loginButton').textContent = currentUser ? `${currentProfile?.display_name || '관리자'} · 프로필/설정` : '로그인';
 }
 
 function renderAll() {
+  renderCategoryNavigation();
+  renderPostCategoryOptions();
   renderPosts();
   renderHeader();
-  $('#postCategory').innerHTML = categories.map(({ name }) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+  renderCategoryManager();
 }
 
-function setCategory(category) {
-  selectedCategory = category;
+function setCategory(categoryId) {
+  selectedCategory = categoryId;
   searchTerm = '';
   currentPage = 1;
   $('#searchInput').value = '';
-  $$('.nav-item').forEach((button) => button.classList.toggle('is-active', (category === '전체글' && button.dataset.view === 'all') || button.dataset.category === category));
   renderAll();
 }
 
@@ -490,6 +650,10 @@ function openProfile() {
   $('#profileDisplayName').value = currentProfile?.display_name || '';
   $('#profileRole').textContent = currentProfile?.role || 'admin';
   $('#profileMessage').textContent = '';
+  $('#categoryMessage').textContent = '';
+  editingCategoryId = null;
+  categoryDeleteTarget = null;
+  renderCategoryManager();
   $('#profileDialog').showModal();
 }
 
@@ -512,15 +676,158 @@ async function saveProfile(event) {
   }
 }
 
+function setCategoryMessage(message = '') {
+  const element = $('#categoryMessage');
+  if (element) element.textContent = message;
+}
+
+async function addCategory(event) {
+  event.preventDefault();
+  const input = $('#categoryNameInput');
+  const name = input.value.trim();
+  if (!name || name.length > 60) {
+    setCategoryMessage('카테고리 이름은 1~60자로 입력해주세요.');
+    return;
+  }
+  setCategoryMessage('카테고리를 추가하는 중...');
+  try {
+    await api('/api/categories', { method: 'POST', body: JSON.stringify({ name }) });
+    input.value = '';
+    await loadBoard();
+    setCategoryMessage('카테고리를 추가했습니다.');
+  } catch (error) {
+    setCategoryMessage(error.message || '카테고리를 추가하지 못했습니다.');
+  }
+}
+
+function beginCategoryRename(id) {
+  if (!categoryById(id)) return;
+  editingCategoryId = id;
+  categoryDeleteTarget = null;
+  renderCategoryManager();
+  requestAnimationFrame(() => {
+    const input = document.getElementById(`categoryRename-${id}`);
+    input?.focus();
+    input?.select();
+  });
+}
+
+function cancelCategoryRename() {
+  editingCategoryId = null;
+  renderCategoryManager();
+}
+
+async function saveCategoryRename(event) {
+  event.preventDefault();
+  const form = event.target;
+  const id = form.dataset.categoryId;
+  const category = categoryById(id);
+  const name = new FormData(form).get('name')?.toString().trim() || '';
+  if (!category) return;
+  if (!name || name.length > 60) {
+    setCategoryMessage('카테고리 이름은 1~60자로 입력해주세요.');
+    return;
+  }
+  if (name === category.name) {
+    cancelCategoryRename();
+    return;
+  }
+  setCategoryMessage('카테고리 이름을 저장하는 중...');
+  try {
+    await api(`/api/categories/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+    editingCategoryId = null;
+    await loadBoard();
+    setCategoryMessage('카테고리 이름을 변경했습니다.');
+  } catch (error) {
+    setCategoryMessage(error.message || '카테고리 이름을 변경하지 못했습니다.');
+  }
+}
+
+async function moveCategory(id, direction) {
+  const index = categories.findIndex((category) => category.id === id);
+  const destination = direction === 'up' ? index - 1 : index + 1;
+  if (index < 0 || destination < 0 || destination >= categories.length) return;
+  const reordered = [...categories];
+  [reordered[index], reordered[destination]] = [reordered[destination], reordered[index]];
+  setCategoryMessage('카테고리 순서를 저장하는 중...');
+  try {
+    await api('/api/categories/order', {
+      method: 'PATCH',
+      body: JSON.stringify({ category_ids: reordered.map((category) => category.id) })
+    });
+    await loadBoard();
+    setCategoryMessage('카테고리 순서를 변경했습니다.');
+  } catch (error) {
+    setCategoryMessage(error.message || '카테고리 순서를 변경하지 못했습니다.');
+  }
+}
+
+function updateCategoryDeleteConfirmButton() {
+  const target = categoryById(categoryDeleteTarget);
+  const otherCategories = target ? categories.filter((category) => category.id !== target.id) : [];
+  const needsReplacement = Boolean(target?.post_count);
+  $('#categoryDeleteConfirmButton').disabled = !target
+    || otherCategories.length === 0
+    || (needsReplacement && !$('#categoryReplacementSelect').value);
+}
+
+function beginCategoryDelete(id) {
+  const category = categoryById(id);
+  if (!category) return;
+  editingCategoryId = null;
+  categoryDeleteTarget = id;
+  setCategoryMessage('');
+  renderCategoryManager();
+  requestAnimationFrame(() => {
+    if (category.post_count > 0) $('#categoryReplacementSelect').focus();
+  });
+}
+
+function cancelCategoryDelete() {
+  categoryDeleteTarget = null;
+  renderCategoryManager();
+}
+
+async function deleteCategory() {
+  const target = categoryById(categoryDeleteTarget);
+  if (!target) return;
+  const replacementId = $('#categoryReplacementSelect').value;
+  if (target.post_count > 0 && (!replacementId || replacementId === target.id || !categoryById(replacementId))) {
+    setCategoryMessage('게시글을 이동할 다른 카테고리를 선택해주세요.');
+    updateCategoryDeleteConfirmButton();
+    return;
+  }
+  const confirmButton = $('#categoryDeleteConfirmButton');
+  confirmButton.disabled = true;
+  setCategoryMessage('카테고리를 삭제하는 중...');
+  try {
+    await api(`/api/categories/${encodeURIComponent(target.id)}`, {
+      method: 'DELETE',
+      body: JSON.stringify(replacementId ? { replacement_id: replacementId } : {})
+    });
+    if (selectedPost?.category_id === target.id) selectedPost = null;
+    categoryDeleteTarget = null;
+    await loadBoard();
+    setCategoryMessage('카테고리를 삭제했습니다.');
+  } catch (error) {
+    setCategoryMessage(error.message || '카테고리를 삭제하지 못했습니다.');
+    updateCategoryDeleteConfirmButton();
+  }
+}
+
 function openEditor(post = null) {
   if (!currentUser || !currentProfile) {
     openLogin();
     return;
   }
+  if (!categories.length) {
+    alert('글을 작성하려면 먼저 카테고리를 하나 이상 추가해주세요.');
+    return;
+  }
   selectedPost = post;
   $('#editorTitle').textContent = post ? '글 수정' : '새 글 작성';
   $('#postId').value = post?.id || '';
-  $('#postCategory').value = post?.category || (selectedCategory !== '전체글' ? selectedCategory : '현생');
+  $('#postCategory').value = post?.category_id || categoryIdByName(post?.category) || (!isAllCategoriesSelected() ? selectedCategory : categories[0].id);
   $('#postAuthor').value = post?.author_name || currentProfile.display_name || '';
   $('#postAuthor').readOnly = true;
   $('#postTitle').value = post?.title || '';
@@ -671,7 +978,7 @@ async function savePost(event) {
   const id = $('#postId').value;
   const original = posts.find((post) => String(post.id) === String(id));
   const payload = {
-    category: $('#postCategory').value,
+    category_id: $('#postCategory').value,
     title: $('#postTitle').value.trim(),
     tags: normalizeTags($('#postTags').value),
     content: $('#postContent').value.trim(),
@@ -679,7 +986,7 @@ async function savePost(event) {
     is_notice: $('#postNotice').checked,
     is_confidential: $('#postConfidential').checked
   };
-  if (!payload.title || !payload.content) {
+  if (!payload.category_id || !payload.title || !payload.content) {
     $('#editorMessage').textContent = '빈칸을 모두 채워주세요.';
     return;
   }
@@ -770,7 +1077,7 @@ function bindEvents() {
   });
   $('.community-nav').addEventListener('click', (event) => {
     const button = event.target.closest('.nav-item');
-    if (button) setCategory(button.dataset.category || '전체글');
+    if (button) setCategory(button.dataset.categoryId || '전체글');
   });
   $('#searchForm').addEventListener('submit', (event) => {
     event.preventDefault();
@@ -868,6 +1175,28 @@ function bindEvents() {
   $('#gateLoginButton').addEventListener('click', openLogin);
   $('#loginForm').addEventListener('submit', submitLogin);
   $('#profileForm').addEventListener('submit', saveProfile);
+  $('#categoryAddForm').addEventListener('submit', (event) => void addCategory(event));
+  $('#categoryList').addEventListener('submit', (event) => {
+    if (event.target.matches('[data-category-rename-form]')) void saveCategoryRename(event);
+  });
+  $('#categoryList').addEventListener('click', (event) => {
+    const row = event.target.closest('[data-category-id]');
+    if (!row) return;
+    const id = row.dataset.categoryId;
+    if (event.target.closest('[data-category-cancel-rename]')) {
+      cancelCategoryRename();
+    } else if (event.target.closest('[data-category-rename]')) {
+      beginCategoryRename(id);
+    } else if (event.target.closest('[data-category-delete]')) {
+      beginCategoryDelete(id);
+    } else {
+      const moveButton = event.target.closest('[data-category-move]');
+      if (moveButton) void moveCategory(id, moveButton.dataset.categoryMove);
+    }
+  });
+  $('#categoryReplacementSelect').addEventListener('change', updateCategoryDeleteConfirmButton);
+  $('#categoryDeleteCancelButton').addEventListener('click', cancelCategoryDelete);
+  $('#categoryDeleteConfirmButton').addEventListener('click', () => void deleteCategory());
   $('#profileLogoutButton').addEventListener('click', async () => {
     try {
       await api('/api/auth/logout', { method: 'POST' });
