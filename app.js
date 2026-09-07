@@ -21,11 +21,12 @@ let selectedPost = null;
 let editorImages = [];
 let editorIsDirty = false;
 let draggedImageIndex = null;
-let memberCount = null;
 let editingCategoryId = null;
 let categoryDeleteTarget = null;
 let editingShortcutId = null;
 let shortcutDeleteTarget = null;
+let bootStatusTimer = null;
+let bootRecoveryTimer = null;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -45,7 +46,6 @@ function clearBoardState() {
   editorImages = [];
   editorIsDirty = false;
   draggedImageIndex = null;
-  memberCount = null;
   editingCategoryId = null;
   categoryDeleteTarget = null;
   editingShortcutId = null;
@@ -182,10 +182,66 @@ function rememberLoginEnabled() {
   return localStorage.getItem(rememberLoginSettingKey) !== 'false';
 }
 
+function clearBootStatusTimer() {
+  if (bootStatusTimer !== null) {
+    window.clearTimeout(bootStatusTimer);
+    bootStatusTimer = null;
+  }
+  if (bootRecoveryTimer !== null) {
+    window.clearTimeout(bootRecoveryTimer);
+    bootRecoveryTimer = null;
+  }
+}
+
+function showLoginGate(message = '승인된 이메일로 로그인하면 게시판을 볼 수 있습니다.') {
+  clearBootStatusTimer();
+  const gate = $('#authGate');
+  gate.hidden = false;
+  gate.dataset.state = 'login';
+  gate.setAttribute('aria-busy', 'false');
+  $('#authGateTitle').textContent = '로그인이 필요합니다.';
+  $('#authGateMessage').textContent = message;
+  $('#authGateProgress').hidden = true;
+  $('#gateLoginButton').hidden = false;
+  $('#authGateRetryButton').hidden = true;
+}
+
+function showBootLoading() {
+  const gate = $('#authGate');
+  $('#appShell').hidden = true;
+  gate.hidden = false;
+  gate.dataset.state = 'checking';
+  gate.setAttribute('aria-busy', 'true');
+  $('#authGateTitle').textContent = '로그인 상태를 확인하고 있어요.';
+  $('#authGateMessage').textContent = '안전하게 게시판을 여는 중입니다.';
+  $('#authGateProgress').hidden = false;
+  $('#authGateProgressLabel').textContent = '잠시만 기다려주세요.';
+  $('#gateLoginButton').hidden = true;
+  $('#authGateRetryButton').hidden = true;
+  clearBootStatusTimer();
+  bootStatusTimer = window.setTimeout(() => {
+    $('#authGateMessage').textContent = '연결 상태에 따라 조금 더 걸릴 수 있어요. 로그인 정보를 계속 확인하고 있습니다.';
+    $('#authGateProgressLabel').textContent = '게시판을 준비하는 중입니다.';
+  }, 1200);
+  bootRecoveryTimer = window.setTimeout(() => {
+    if (gate.dataset.state !== 'checking') return;
+    gate.setAttribute('aria-busy', 'false');
+    $('#authGateTitle').textContent = '로그인 확인에 시간이 걸리고 있어요.';
+    $('#authGateMessage').textContent = '연결을 다시 시도하거나 이메일로 로그인할 수 있습니다.';
+    $('#authGateProgress').hidden = true;
+    $('#gateLoginButton').hidden = false;
+    $('#authGateRetryButton').hidden = false;
+  }, 8000);
+}
+
 function setBoardVisibility(visible, message = '승인된 이메일로 로그인하면 게시판을 볼 수 있습니다.') {
   $('#appShell').hidden = !visible;
-  $('#authGate').hidden = visible;
-  if (!visible) $('#authGateMessage').textContent = message;
+  if (visible) {
+    clearBootStatusTimer();
+    $('#authGate').hidden = true;
+  } else {
+    showLoginGate(message);
+  }
 }
 
 function createApiError(message, status) {
@@ -389,12 +445,15 @@ function isConfidential(post) {
 
 async function loadBoard() {
   const data = await api('/api/bootstrap');
+  applyBoardData(data);
+}
+
+function applyBoardData(data) {
   currentUser = data.user || null;
   currentProfile = data.profile || null;
   categories = normalizeCategories(data.categories);
   shortcuts = normalizeShortcuts(data.shortcuts);
   posts = (data.posts || []).map(normalizePost);
-  memberCount = Number.isFinite(data.memberCount) ? data.memberCount : null;
   reconcileSelectedCategory();
   setBoardVisibility(true);
   renderAll();
@@ -1306,8 +1365,9 @@ async function consumeMagicLink() {
   const accessToken = fragment.get('access_token');
   const refreshToken = fragment.get('refresh_token');
   if (!accessToken || !refreshToken) return { errorCode: null };
+  let callback;
   try {
-    await api('/api/auth/callback', {
+    callback = await api('/api/auth/callback', {
       method: 'POST',
       body: JSON.stringify({
         access_token: accessToken,
@@ -1319,7 +1379,7 @@ async function consumeMagicLink() {
   } finally {
     window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
   }
-  return { errorCode: null };
+  return { errorCode: null, bootstrap: callback?.bootstrap || null };
 }
 
 function bindEvents() {
@@ -1429,6 +1489,7 @@ function bindEvents() {
   $('#sharePostButton').addEventListener('click', () => void copyPostShareLink());
   $('#loginButton').addEventListener('click', () => currentUser ? openProfile() : openLogin());
   $('#gateLoginButton').addEventListener('click', openLogin);
+  $('#authGateRetryButton').addEventListener('click', () => window.location.reload());
   $('#loginForm').addEventListener('submit', submitLogin);
   $('#profileForm').addEventListener('submit', saveProfile);
   $('#categoryAddForm').addEventListener('submit', (event) => void addCategory(event));
@@ -1510,6 +1571,7 @@ function registerServiceWorker() {
 }
 
 async function start() {
+  showBootLoading();
   if (boardConfig.siteName) {
     document.title = boardConfig.siteName;
     $('.brand strong').textContent = boardConfig.siteName;
@@ -1527,7 +1589,8 @@ async function start() {
         : '로그인 링크를 확인하지 못했습니다. 새 로그인 메일을 요청한 뒤 다시 시도해주세요.');
       return;
     }
-    await loadBoard();
+    if (magicLink?.bootstrap) applyBoardData(magicLink.bootstrap);
+    else await loadBoard();
     clearPendingSharedSearchTerm();
     const post = sharedSearch ? preferredSearchResult(sharedSearch) : null;
     if (post) await openViewer(post.id);

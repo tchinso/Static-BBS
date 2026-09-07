@@ -1,10 +1,9 @@
 import { json, serverError, unauthorized } from '../_lib/http.js';
-import { drainImageCleanupQueue, ensureAdminProfile, listPosts, memberCount } from '../_lib/board.js';
-import { listCategories } from '../_lib/categories.js';
-import { listShortcuts } from '../_lib/shortcuts.js';
+import { createBoardBootstrap } from '../_lib/bootstrap.js';
 import { getAuthorizedSession } from '../_lib/session.js';
 
 export async function onRequestGet(context) {
+  const startedAt = performance.now();
   let auth;
   try {
     auth = await getAuthorizedSession(context.request, context.env);
@@ -14,23 +13,16 @@ export async function onRequestGet(context) {
   if (!auth.ok) return unauthorized({ 'Set-Cookie': auth.clearCookie });
 
   try {
-    const profile = await ensureAdminProfile(context.env, auth.user);
-    const cleanup = await drainImageCleanupQueue(context.env);
-    if (!cleanup.ok) console.error('image_cleanup_deferred', { pending: cleanup.pending });
-    const [posts, categories, shortcuts, count] = await Promise.all([
-      listPosts(context.env),
-      listCategories(context.env, { includePostCount: true }),
-      listShortcuts(context.env),
-      memberCount(context.env)
-    ]);
-    return json({
-      user: { id: auth.user.id, email: auth.user.email, role: 'admin' },
-      profile,
-      posts,
-      categories,
-      shortcuts,
-      memberCount: count
-    }, 200, auth.setCookie ? { 'Set-Cookie': auth.setCookie } : undefined);
+    const authenticatedAt = performance.now();
+    const bootstrap = await createBoardBootstrap(context.env, auth.user);
+    const headers = new Headers(auth.setCookie ? { 'Set-Cookie': auth.setCookie } : undefined);
+    const completedAt = performance.now();
+    headers.set('Server-Timing', [
+      `auth;dur=${(authenticatedAt - startedAt).toFixed(1)}`,
+      `board;dur=${(completedAt - authenticatedAt).toFixed(1)}`,
+      `total;dur=${(completedAt - startedAt).toFixed(1)}`
+    ].join(', '));
+    return json(bootstrap, 200, headers);
   } catch {
     return serverError();
   }

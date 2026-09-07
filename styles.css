@@ -28,7 +28,13 @@ a { color: inherit; text-decoration: none; }
 .auth-gate-card .eyebrow { color: #bcc2ca; }
 .auth-gate-card h1 { margin: 0; font-size: 25px; letter-spacing: -.04em; }
 .auth-gate-card p { margin: 11px 0 22px; color: #d2d6dc; font-size: 12px; line-height: 1.7; }
+.auth-gate-progress { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 20px; margin-top: -8px !important; color: #eef0f3 !important; }
+.auth-spinner { width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: auth-spin .8s linear infinite; }
+.auth-gate[data-state="login"] .auth-gate-progress { display: none; }
+.auth-gate-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
 .auth-gate-card .button { border-color: #fff; color: #27303a; background: #fff; }
+.auth-gate-card .button-ghost { color: #fff; background: transparent; }
+@keyframes auth-spin { to { transform: rotate(360deg); } }
 
 .site-header { position: sticky; top: 0; z-index: 20; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.94); backdrop-filter: blur(14px); }
 .header-inner { width: min(1180px, calc(100% - 36px)); margin: 0 auto; }

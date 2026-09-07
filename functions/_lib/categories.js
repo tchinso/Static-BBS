@@ -28,6 +28,18 @@ export function isCategoryId(value) {
   return typeof value === 'string' && UUID.test(value);
 }
 
+export function withCategoryPostCounts(categories, posts) {
+  const postCounts = new Map();
+  for (const post of Array.isArray(posts) ? posts : []) {
+    if (!isCategoryId(post?.category_id)) continue;
+    postCounts.set(post.category_id, (postCounts.get(post.category_id) || 0) + 1);
+  }
+  return (Array.isArray(categories) ? categories : []).map((category) => ({
+    ...category,
+    post_count: postCounts.get(category.id) || 0
+  }));
+}
+
 export async function listCategories(env, { includePostCount = false } = {}) {
   const categoriesResult = await supabaseJson(env, restQuery('community_categories', {
     select: 'id,name,sort_order',
@@ -44,15 +56,7 @@ export async function listCategories(env, { includePostCount = false } = {}) {
   if (!postsResult.response.ok || !Array.isArray(postsResult.data)) {
     throw new Error('Category post count lookup failed.');
   }
-  const postCounts = new Map();
-  for (const post of postsResult.data) {
-    if (!isCategoryId(post?.category_id)) continue;
-    postCounts.set(post.category_id, (postCounts.get(post.category_id) || 0) + 1);
-  }
-  return categories.map((category) => ({
-    ...category,
-    post_count: postCounts.get(category.id) || 0
-  }));
+  return withCategoryPostCounts(categories, postsResult.data);
 }
 
 export async function createCategory(env, name) {
