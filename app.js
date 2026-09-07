@@ -28,7 +28,7 @@ let shortcutDeleteTarget = null;
 let bootStatusTimer = null;
 let bootRecoveryTimer = null;
 
-const STARTUP_AUTH_RETRY_DELAY_MS = 3000;
+const STARTUP_AUTH_RETRY_DELAY_MS = 2650;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
