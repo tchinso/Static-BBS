@@ -45,14 +45,14 @@
     <aside class="sidebar" aria-label="게시판 안내">
       <section class="sidebar-card notice-strip notice-card" id="noticeStrip" hidden aria-label="공지"></section>
       <section class="sidebar-card shortcut-card">
-        <div class="sidebar-title"><span>바로가기 링크</span><button id="shortcutToggle" type="button" aria-controls="shortcutList" aria-expanded="false">펼치기</button></div>
-        <div class="shortcut-list is-collapsed" id="shortcutList">
-          <a class="shortcut-link" href="https://fav.ju.mp" target="_blank" rel="noopener noreferrer"><span>Favorites</span><b aria-hidden="true">↗</b></a>
-          <a class="shortcut-link" href="https://soleil.channel.io/home" target="_blank" rel="noopener noreferrer"><span>업로드(ChannelTalk)</span><b aria-hidden="true">↗</b></a>
-          <a class="shortcut-link" href="https://mega.nz/filerequest/OMvCqk6eddY" target="_blank" rel="noopener noreferrer"><span>업로드(Mega)</span><b aria-hidden="true">↗</b></a>
-          <a class="shortcut-link" href="https://app.koofr.net/receive/690f58b6-4cc5-4b19-89f0-79b862198dba" target="_blank" rel="noopener noreferrer"><span>업로드(Koofr)</span><b aria-hidden="true">↗</b></a>
-          <a class="shortcut-link" href="https://2.h2h.workers.dev/#bn5=)0U80I*pYj6t[!u{{;b@+cn}V*qM~j&bYqOgXtEYjIpVXStR7*],sP;=]+qEE4^YeTLl8gk;9sUQkSxi&Q,(F2e8r*O:6._9gvMvF{}$_4B@saCFwoeLxiHvDpTlZe;-2Q|kwu^!Lx)/Y6NNuLYW" target="_blank" rel="noopener noreferrer"><span>업로드(Pcloud)</span><b aria-hidden="true">↗</b></a>
+        <div class="sidebar-title">
+          <span>바로가기 링크</span>
+          <span class="shortcut-header-actions">
+            <button id="shortcutEditButton" type="button" hidden>수정</button>
+            <button id="shortcutToggle" type="button" aria-controls="shortcutList" aria-expanded="false">펼치기</button>
+          </span>
         </div>
+        <div class="shortcut-list is-collapsed" id="shortcutList" aria-live="polite"></div>
       </section>
     </aside>
 
@@ -214,6 +214,33 @@
           </div>
         </section>
         <div class="form-message" id="categoryMessage" role="status"></div>
+      </section>
+
+      <section class="shortcut-settings" id="shortcutSettings" hidden aria-labelledby="shortcutSettingsTitle">
+        <div class="category-settings-heading">
+          <div>
+            <span class="eyebrow">SHORTCUT LINKS</span>
+            <h3 id="shortcutSettingsTitle">바로가기 링크 관리</h3>
+          </div>
+          <span class="category-settings-help">제목과 주소를 바꾸거나 표시 순서를 정할 수 있어요.</span>
+        </div>
+        <form class="shortcut-add-form" id="shortcutAddForm">
+          <label class="sr-only" for="shortcutTitleInput">새 바로가기 제목</label>
+          <input id="shortcutTitleInput" name="title" maxlength="100" placeholder="바로가기 제목" required>
+          <label class="sr-only" for="shortcutUrlInput">새 바로가기 주소</label>
+          <input id="shortcutUrlInput" name="url" type="url" maxlength="2048" placeholder="https://example.com" required>
+          <button class="button button-primary" type="submit">추가</button>
+        </form>
+        <div class="shortcut-settings-list" id="shortcutSettingsList" aria-live="polite"></div>
+        <section class="shortcut-delete-panel" id="shortcutDeletePanel" hidden aria-live="polite">
+          <strong id="shortcutDeleteTitle"></strong>
+          <p>이 바로가기 링크를 삭제하면 되돌릴 수 없습니다.</p>
+          <div class="shortcut-delete-actions">
+            <button class="button button-ghost" id="shortcutDeleteCancelButton" type="button">취소</button>
+            <button class="button button-danger" id="shortcutDeleteConfirmButton" type="button">바로가기 삭제</button>
+          </div>
+        </section>
+        <div class="form-message" id="shortcutMessage" role="status"></div>
       </section>
     </section>
   </dialog>

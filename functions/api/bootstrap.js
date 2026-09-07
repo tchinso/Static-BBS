@@ -1,6 +1,7 @@
 import { json, serverError, unauthorized } from '../_lib/http.js';
 import { drainImageCleanupQueue, ensureAdminProfile, listPosts, memberCount } from '../_lib/board.js';
 import { listCategories } from '../_lib/categories.js';
+import { listShortcuts } from '../_lib/shortcuts.js';
 import { getAuthorizedSession } from '../_lib/session.js';
 
 export async function onRequestGet(context) {
@@ -16,9 +17,10 @@ export async function onRequestGet(context) {
     const profile = await ensureAdminProfile(context.env, auth.user);
     const cleanup = await drainImageCleanupQueue(context.env);
     if (!cleanup.ok) console.error('image_cleanup_deferred', { pending: cleanup.pending });
-    const [posts, categories, count] = await Promise.all([
+    const [posts, categories, shortcuts, count] = await Promise.all([
       listPosts(context.env),
       listCategories(context.env, { includePostCount: true }),
+      listShortcuts(context.env),
       memberCount(context.env)
     ]);
     return json({
@@ -26,6 +28,7 @@ export async function onRequestGet(context) {
       profile,
       posts,
       categories,
+      shortcuts,
       memberCount: count
     }, 200, auth.setCookie ? { 'Set-Cookie': auth.setCookie } : undefined);
   } catch {

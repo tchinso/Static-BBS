@@ -10,6 +10,7 @@ const pendingSharedSearchMaxAge = 60 * 60 * 1000;
 let currentUser = null;
 let currentProfile = null;
 let categories = [];
+let shortcuts = [];
 let posts = [];
 let filteredPosts = [];
 let selectedCategory = '전체글';
@@ -23,6 +24,8 @@ let draggedImageIndex = null;
 let memberCount = null;
 let editingCategoryId = null;
 let categoryDeleteTarget = null;
+let editingShortcutId = null;
+let shortcutDeleteTarget = null;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -35,6 +38,7 @@ function clearBoardState() {
   currentUser = null;
   currentProfile = null;
   categories = [];
+  shortcuts = [];
   posts = [];
   filteredPosts = [];
   selectedPost = null;
@@ -44,11 +48,13 @@ function clearBoardState() {
   memberCount = null;
   editingCategoryId = null;
   categoryDeleteTarget = null;
+  editingShortcutId = null;
+  shortcutDeleteTarget = null;
   currentPage = 1;
   selectedCategory = '전체글';
   searchTerm = '';
 
-  ['#categoryNav', '#postCategory', '#categoryList', '#postList', '#pagination', '#viewerTags', '#viewerImages', '#imageEditorList', '#shareLinkMessage'].forEach((selector) => {
+  ['#categoryNav', '#postCategory', '#categoryList', '#shortcutList', '#shortcutSettingsList', '#postList', '#pagination', '#viewerTags', '#viewerImages', '#imageEditorList', '#shareLinkMessage'].forEach((selector) => {
     const element = $(selector);
     if (element) element.replaceChildren();
   });
@@ -77,6 +83,12 @@ function clearBoardState() {
   if (categoryDeletePanel) categoryDeletePanel.hidden = true;
   const categoryMessage = $('#categoryMessage');
   if (categoryMessage) categoryMessage.textContent = '';
+  const shortcutDeletePanel = $('#shortcutDeletePanel');
+  if (shortcutDeletePanel) shortcutDeletePanel.hidden = true;
+  const shortcutMessage = $('#shortcutMessage');
+  if (shortcutMessage) shortcutMessage.textContent = '';
+  const shortcutEditButton = $('#shortcutEditButton');
+  if (shortcutEditButton) shortcutEditButton.hidden = true;
 }
 
 function escapeHtml(value) {
@@ -98,6 +110,29 @@ function normalizeCategories(value) {
     }))
     .filter((category) => category.id && category.name)
     .sort((left, right) => left.sort_order - right.sort_order || left.name.localeCompare(right.name, 'ko'));
+}
+
+function normalizeShortcutUrl(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+function normalizeShortcuts(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((shortcut) => ({
+      id: String(shortcut?.id ?? '').trim(),
+      title: String(shortcut?.title ?? '').trim(),
+      url: normalizeShortcutUrl(shortcut?.url),
+      sort_order: Number(shortcut?.sort_order ?? 0)
+    }))
+    .filter((shortcut) => shortcut.id && shortcut.title && shortcut.url)
+    .sort((left, right) => left.sort_order - right.sort_order || left.title.localeCompare(right.title, 'ko'));
 }
 
 function categoryById(id) {
@@ -357,6 +392,7 @@ async function loadBoard() {
   currentUser = data.user || null;
   currentProfile = data.profile || null;
   categories = normalizeCategories(data.categories);
+  shortcuts = normalizeShortcuts(data.shortcuts);
   posts = (data.posts || []).map(normalizePost);
   memberCount = Number.isFinite(data.memberCount) ? data.memberCount : null;
   reconcileSelectedCategory();
@@ -538,6 +574,20 @@ function renderPostCategoryOptions() {
   if (categoryById(selectedValue)) select.value = selectedValue;
 }
 
+function renderShortcutList() {
+  const list = $('#shortcutList');
+  const editButton = $('#shortcutEditButton');
+  if (editButton) editButton.hidden = !roleIsAdmin();
+  if (!list) return;
+  list.innerHTML = shortcuts.length
+    ? shortcuts.map((shortcut) => `
+      <a class="shortcut-link" href="${escapeHtml(shortcut.url)}" target="_blank" rel="noopener noreferrer">
+        <span>${escapeHtml(shortcut.title)}</span><b aria-hidden="true">↗</b>
+      </a>
+    `).join('')
+    : '<p class="shortcut-empty">등록된 바로가기 링크가 없습니다.</p>';
+}
+
 function renderCategoryDeletePanel() {
   const panel = $('#categoryDeletePanel');
   if (!panel) return;
@@ -615,6 +665,63 @@ function renderCategoryManager() {
   renderCategoryDeletePanel();
 }
 
+function renderShortcutDeletePanel() {
+  const panel = $('#shortcutDeletePanel');
+  if (!panel) return;
+  const target = shortcuts.find((shortcut) => shortcut.id === shortcutDeleteTarget);
+  if (!target) {
+    shortcutDeleteTarget = null;
+    panel.hidden = true;
+    return;
+  }
+  $('#shortcutDeleteTitle').textContent = `“${target.title}” 바로가기 삭제`;
+  panel.hidden = false;
+}
+
+function renderShortcutManager() {
+  const settings = $('#shortcutSettings');
+  const list = $('#shortcutSettingsList');
+  if (!settings || !list) return;
+  const canManage = roleIsAdmin();
+  settings.hidden = !canManage;
+  if (!canManage) return;
+
+  if (editingShortcutId && !shortcuts.some((shortcut) => shortcut.id === editingShortcutId)) editingShortcutId = null;
+  list.innerHTML = shortcuts.map((shortcut, index) => {
+    const isEditing = editingShortcutId === shortcut.id;
+    return `
+      <article class="shortcut-row" data-shortcut-id="${escapeHtml(shortcut.id)}">
+        <div class="shortcut-row-main">
+          ${isEditing ? `
+            <form class="shortcut-edit-form" data-shortcut-edit-form data-shortcut-id="${escapeHtml(shortcut.id)}">
+              <label class="sr-only" for="shortcutEditTitle-${escapeHtml(shortcut.id)}">바로가기 제목</label>
+              <input id="shortcutEditTitle-${escapeHtml(shortcut.id)}" name="title" maxlength="100" value="${escapeHtml(shortcut.title)}" required>
+              <label class="sr-only" for="shortcutEditUrl-${escapeHtml(shortcut.id)}">바로가기 주소</label>
+              <input id="shortcutEditUrl-${escapeHtml(shortcut.id)}" name="url" type="url" maxlength="2048" value="${escapeHtml(shortcut.url)}" required>
+              <div class="shortcut-edit-actions">
+                <button class="button button-primary" type="submit">저장</button>
+                <button class="button button-ghost" type="button" data-shortcut-cancel-edit>취소</button>
+              </div>
+            </form>
+          ` : `
+            <strong>${escapeHtml(shortcut.title)}</strong>
+            <a href="${escapeHtml(shortcut.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(shortcut.url)}</a>
+          `}
+        </div>
+        ${isEditing ? '' : `
+          <div class="shortcut-row-actions" role="group" aria-label="${escapeHtml(shortcut.title)} 바로가기 관리">
+            <button class="button button-ghost" type="button" data-shortcut-move="up" ${index === 0 ? 'disabled' : ''}>위로</button>
+            <button class="button button-ghost" type="button" data-shortcut-move="down" ${index === shortcuts.length - 1 ? 'disabled' : ''}>아래로</button>
+            <button class="button button-ghost" type="button" data-shortcut-edit>수정</button>
+            <button class="button button-danger" type="button" data-shortcut-delete>삭제</button>
+          </div>
+        `}
+      </article>
+    `;
+  }).join('') || '<p class="shortcut-empty">등록된 바로가기 링크가 없습니다. 새 링크를 추가해주세요.</p>';
+  renderShortcutDeletePanel();
+}
+
 function renderHeader() {
   const categoryName = selectedCategoryName();
   $('#boardTitle').textContent = searchTerm ? `'${searchTerm}' 검색 결과` : isAllCategoriesSelected() ? '전체글보기' : categoryName;
@@ -625,9 +732,11 @@ function renderHeader() {
 function renderAll() {
   renderCategoryNavigation();
   renderPostCategoryOptions();
+  renderShortcutList();
   renderPosts();
   renderHeader();
   renderCategoryManager();
+  renderShortcutManager();
 }
 
 function setCategory(categoryId) {
@@ -644,17 +753,27 @@ function openLogin() {
   $('#loginDialog').showModal();
 }
 
-function openProfile() {
+function openProfile({ focusShortcuts = false } = {}) {
   if (!currentUser) return;
   $('#profileEmail').value = currentUser.email || '';
   $('#profileDisplayName').value = currentProfile?.display_name || '';
   $('#profileRole').textContent = currentProfile?.role || 'admin';
   $('#profileMessage').textContent = '';
   $('#categoryMessage').textContent = '';
+  $('#shortcutMessage').textContent = '';
   editingCategoryId = null;
   categoryDeleteTarget = null;
+  editingShortcutId = null;
+  shortcutDeleteTarget = null;
   renderCategoryManager();
+  renderShortcutManager();
   $('#profileDialog').showModal();
+  if (focusShortcuts) {
+    requestAnimationFrame(() => {
+      $('#shortcutSettings')?.scrollIntoView({ block: 'start' });
+      $('#shortcutTitleInput')?.focus();
+    });
+  }
 }
 
 async function saveProfile(event) {
@@ -813,6 +932,143 @@ async function deleteCategory() {
     setCategoryMessage(error.message || '카테고리를 삭제하지 못했습니다.');
     updateCategoryDeleteConfirmButton();
   }
+}
+
+function setShortcutMessage(message = '') {
+  const element = $('#shortcutMessage');
+  if (element) element.textContent = message;
+}
+
+function shortcutInputValues(form) {
+  const values = new FormData(form);
+  return {
+    title: values.get('title')?.toString().trim() || '',
+    url: normalizeShortcutUrl(values.get('url'))
+  };
+}
+
+function validateShortcutInput({ title, url }) {
+  if (!title || title.length > 100) return '바로가기 제목은 1~100자로 입력해주세요.';
+  if (!url || url.length > 2048) return 'http 또는 https 주소를 입력해주세요.';
+  return '';
+}
+
+async function addShortcut(event) {
+  event.preventDefault();
+  const values = shortcutInputValues(event.target);
+  const validationMessage = validateShortcutInput(values);
+  if (validationMessage) {
+    setShortcutMessage(validationMessage);
+    return;
+  }
+  setShortcutMessage('바로가기 링크를 추가하는 중...');
+  try {
+    await api('/api/shortcuts', { method: 'POST', body: JSON.stringify(values) });
+    event.target.reset();
+    await loadBoard();
+    setShortcutMessage('바로가기 링크를 추가했습니다.');
+  } catch (error) {
+    setShortcutMessage(error.message || '바로가기 링크를 추가하지 못했습니다.');
+  }
+}
+
+function beginShortcutEdit(id) {
+  if (!shortcuts.some((shortcut) => shortcut.id === id)) return;
+  editingShortcutId = id;
+  shortcutDeleteTarget = null;
+  renderShortcutManager();
+  requestAnimationFrame(() => {
+    const input = document.getElementById(`shortcutEditTitle-${id}`);
+    input?.focus();
+    input?.select();
+  });
+}
+
+function cancelShortcutEdit() {
+  editingShortcutId = null;
+  renderShortcutManager();
+}
+
+async function saveShortcutEdit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const id = form.dataset.shortcutId;
+  const shortcut = shortcuts.find((item) => item.id === id);
+  const values = shortcutInputValues(form);
+  if (!shortcut) return;
+  const validationMessage = validateShortcutInput(values);
+  if (validationMessage) {
+    setShortcutMessage(validationMessage);
+    return;
+  }
+  if (values.title === shortcut.title && values.url === shortcut.url) {
+    cancelShortcutEdit();
+    return;
+  }
+  setShortcutMessage('바로가기 링크를 저장하는 중...');
+  try {
+    await api(`/api/shortcuts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(values) });
+    editingShortcutId = null;
+    await loadBoard();
+    setShortcutMessage('바로가기 링크를 수정했습니다.');
+  } catch (error) {
+    setShortcutMessage(error.message || '바로가기 링크를 수정하지 못했습니다.');
+  }
+}
+
+async function moveShortcut(id, direction) {
+  const index = shortcuts.findIndex((shortcut) => shortcut.id === id);
+  const destination = direction === 'up' ? index - 1 : index + 1;
+  if (index < 0 || destination < 0 || destination >= shortcuts.length) return;
+  const reordered = [...shortcuts];
+  [reordered[index], reordered[destination]] = [reordered[destination], reordered[index]];
+  setShortcutMessage('바로가기 링크 순서를 저장하는 중...');
+  try {
+    await api('/api/shortcuts/order', {
+      method: 'PATCH',
+      body: JSON.stringify({ shortcut_ids: reordered.map((shortcut) => shortcut.id) })
+    });
+    await loadBoard();
+    setShortcutMessage('바로가기 링크 순서를 변경했습니다.');
+  } catch (error) {
+    setShortcutMessage(error.message || '바로가기 링크 순서를 변경하지 못했습니다.');
+  }
+}
+
+function beginShortcutDelete(id) {
+  if (!shortcuts.some((shortcut) => shortcut.id === id)) return;
+  editingShortcutId = null;
+  shortcutDeleteTarget = id;
+  $('#shortcutDeleteConfirmButton').disabled = false;
+  setShortcutMessage('');
+  renderShortcutManager();
+}
+
+function cancelShortcutDelete() {
+  shortcutDeleteTarget = null;
+  renderShortcutManager();
+}
+
+async function deleteShortcut() {
+  const shortcut = shortcuts.find((item) => item.id === shortcutDeleteTarget);
+  if (!shortcut) return;
+  const confirmButton = $('#shortcutDeleteConfirmButton');
+  confirmButton.disabled = true;
+  setShortcutMessage('바로가기 링크를 삭제하는 중...');
+  try {
+    await api(`/api/shortcuts/${encodeURIComponent(shortcut.id)}`, { method: 'DELETE' });
+    shortcutDeleteTarget = null;
+    await loadBoard();
+    setShortcutMessage('바로가기 링크를 삭제했습니다.');
+  } catch (error) {
+    setShortcutMessage(error.message || '바로가기 링크를 삭제하지 못했습니다.');
+    confirmButton.disabled = false;
+  }
+}
+
+function openShortcutSettings() {
+  if (!roleIsAdmin()) return;
+  openProfile({ focusShortcuts: true });
 }
 
 function openEditor(post = null) {
@@ -1197,6 +1453,27 @@ function bindEvents() {
   $('#categoryReplacementSelect').addEventListener('change', updateCategoryDeleteConfirmButton);
   $('#categoryDeleteCancelButton').addEventListener('click', cancelCategoryDelete);
   $('#categoryDeleteConfirmButton').addEventListener('click', () => void deleteCategory());
+  $('#shortcutAddForm').addEventListener('submit', (event) => void addShortcut(event));
+  $('#shortcutSettingsList').addEventListener('submit', (event) => {
+    if (event.target.matches('[data-shortcut-edit-form]')) void saveShortcutEdit(event);
+  });
+  $('#shortcutSettingsList').addEventListener('click', (event) => {
+    const row = event.target.closest('[data-shortcut-id]');
+    if (!row) return;
+    const id = row.dataset.shortcutId;
+    if (event.target.closest('[data-shortcut-cancel-edit]')) {
+      cancelShortcutEdit();
+    } else if (event.target.closest('[data-shortcut-edit]')) {
+      beginShortcutEdit(id);
+    } else if (event.target.closest('[data-shortcut-delete]')) {
+      beginShortcutDelete(id);
+    } else {
+      const moveButton = event.target.closest('[data-shortcut-move]');
+      if (moveButton) void moveShortcut(id, moveButton.dataset.shortcutMove);
+    }
+  });
+  $('#shortcutDeleteCancelButton').addEventListener('click', cancelShortcutDelete);
+  $('#shortcutDeleteConfirmButton').addEventListener('click', () => void deleteShortcut());
   $('#profileLogoutButton').addEventListener('click', async () => {
     try {
       await api('/api/auth/logout', { method: 'POST' });
@@ -1211,6 +1488,7 @@ function bindEvents() {
     $('#shortcutToggle').textContent = collapsed ? '펼치기' : '접기';
     $('#shortcutToggle').setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   });
+  $('#shortcutEditButton').addEventListener('click', openShortcutSettings);
   $$('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => closeDialog(button.dataset.closeDialog)));
   $$('.modal').forEach((dialog) => dialog.addEventListener('click', (event) => { if (event.target === dialog) closeDialog(dialog.id); }));
   $('#editorDialog').addEventListener('cancel', (event) => {
