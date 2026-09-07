@@ -212,6 +212,20 @@ function showLoginGate(message = '승인된 이메일로 로그인하면 게시�
   $('#authGateRetryButton').hidden = true;
 }
 
+function showConnectionRecoveryGate() {
+  clearBootStatusTimer();
+  const gate = $('#authGate');
+  $('#appShell').hidden = true;
+  gate.hidden = false;
+  gate.dataset.state = 'recovery';
+  gate.setAttribute('aria-busy', 'false');
+  $('#authGateTitle').textContent = '로그인 확인에 시간이 걸리고 있어요.';
+  $('#authGateMessage').textContent = '연결을 다시 시도하거나 이메일로 로그인할 수 있습니다.';
+  $('#authGateProgress').hidden = true;
+  $('#gateLoginButton').hidden = false;
+  $('#authGateRetryButton').hidden = false;
+}
+
 function showBootLoading() {
   const gate = $('#authGate');
   $('#appShell').hidden = true;
@@ -231,12 +245,7 @@ function showBootLoading() {
   }, 1200);
   bootRecoveryTimer = window.setTimeout(() => {
     if (gate.dataset.state !== 'checking') return;
-    gate.setAttribute('aria-busy', 'false');
-    $('#authGateTitle').textContent = '로그인 확인에 시간이 걸리고 있어요.';
-    $('#authGateMessage').textContent = '연결을 다시 시도하거나 이메일로 로그인할 수 있습니다.';
-    $('#authGateProgress').hidden = true;
-    $('#gateLoginButton').hidden = false;
-    $('#authGateRetryButton').hidden = false;
+    showConnectionRecoveryGate();
   }, STARTUP_AUTH_RECOVERY_TIMEOUT_MS);
 }
 
@@ -1623,10 +1632,11 @@ async function start() {
     if (post) await openViewer(post.id);
   } catch (error) {
     console.error(error);
-    const message = error.status === 401 || error.status === 403
-      ? '승인된 이메일로 로그인하면 게시판을 볼 수 있습니다.'
-      : '로그인 상태를 확인하지 못했습니다. 다시 로그인해주세요.';
-    setBoardVisibility(false, message);
+    if (error.status === 401 || error.status === 403) {
+      setBoardVisibility(false);
+    } else {
+      showConnectionRecoveryGate();
+    }
   }
 }
 

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'nyangcatmemo-shell-v3';
+const CACHE_NAME = 'nyangcatmemo-shell-v4';
 const APP_SHELL = [
   './',
   './index.html',
