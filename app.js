@@ -28,10 +28,6 @@ let shortcutDeleteTarget = null;
 let bootStatusTimer = null;
 let bootRecoveryTimer = null;
 
-// Check immediately, then retry at 2.7 s and 5.4 s from startup.  The gate
-// changes to the recovery state at 8.1 s, after all three checks have had a
-// chance to run.
-const STARTUP_AUTH_RETRY_AT_MS = [2700, 5400];
 const STARTUP_AUTH_RECOVERY_TIMEOUT_MS = 8100;
 
 const $ = (selector) => document.querySelector(selector);
@@ -219,8 +215,8 @@ function showConnectionRecoveryGate() {
   gate.hidden = false;
   gate.dataset.state = 'recovery';
   gate.setAttribute('aria-busy', 'false');
-  $('#authGateTitle').textContent = '로그인 확인에 시간이 걸리고 있어요.';
-  $('#authGateMessage').textContent = '연결을 다시 시도하거나 이메일로 로그인할 수 있습니다.';
+  $('#authGateTitle').textContent = '로그인 확인에 실패했습니다.';
+  $('#authGateMessage').textContent = '로그인 상태를 확인하지 못했습니다. 다시 로그인해주세요.';
   $('#authGateProgress').hidden = true;
   $('#gateLoginButton').hidden = false;
   $('#authGateRetryButton').hidden = false;
@@ -465,23 +461,7 @@ async function loadBoard({ deferUnauthorizedGate = false } = {}) {
 }
 
 async function loadStartupBoard() {
-  const startedAt = performance.now();
-  let lastUnauthorizedError = null;
-
-  for (const attemptAt of [0, ...STARTUP_AUTH_RETRY_AT_MS]) {
-    const waitMs = attemptAt - (performance.now() - startedAt);
-    if (waitMs > 0) await new Promise((resolve) => window.setTimeout(resolve, waitMs));
-
-    try {
-      await loadBoard({ deferUnauthorizedGate: true });
-      return;
-    } catch (error) {
-      if (error.status !== 401 && error.status !== 403) throw error;
-      lastUnauthorizedError = error;
-    }
-  }
-
-  throw lastUnauthorizedError;
+  await loadBoard({ deferUnauthorizedGate: true });
 }
 
 function applyBoardData(data) {
