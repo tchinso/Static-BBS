@@ -6,6 +6,10 @@ const maxImagesPerPost = 10;
 const shareTagPattern = /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z\d]{6}$/;
 const pendingSharedSearchStorageKey = 'nyangcatmemoPendingSharedSearch';
 const pendingSharedSearchMaxAge = 60 * 60 * 1000;
+const shortTimeFormatter = new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+const shortDateFormatter = new Intl.DateTimeFormat('ko-KR', { month: '2-digit', day: '2-digit' });
+const fullDateFormatter = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+const numberFormatter = new Intl.NumberFormat('ko-KR');
 
 let currentUser = null;
 let currentProfile = null;
@@ -30,7 +34,12 @@ let bootRecoveryTimer = null;
 
 const STARTUP_AUTH_RECOVERY_TIMEOUT_MS = 8100;
 
-const $ = (selector) => document.querySelector(selector);
+// The app shell is static, so avoid repeatedly parsing and traversing the same selectors.
+const elementCache = new Map();
+const $ = (selector) => {
+  if (!elementCache.has(selector)) elementCache.set(selector, document.querySelector(selector));
+  return elementCache.get(selector);
+};
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 // Never leave previously fetched private content in the DOM after logout or a
@@ -160,11 +169,14 @@ function normalizePost(post) {
     ?? categoryById(categoryId)?.name
     ?? ''
   ).trim();
+  const normalizedTags = normalizeTags(post?.tags);
   return {
     ...post,
     category_id: categoryId,
     category: categoryName,
-    image_urls: normalizeImagePaths(post?.image_urls)
+    image_urls: normalizeImagePaths(post?.image_urls),
+    tags: normalizedTags,
+    _searchText: `${post?.title || ''} ${post?.content || ''} ${post?.author_name || ''} ${normalizedTags.join(' ')}`.toLocaleLowerCase('ko')
   };
 }
 
@@ -288,14 +300,14 @@ function formatDate(value) {
   if (Number.isNaN(date.getTime())) return '';
   const now = new Date();
   if (date.toDateString() === now.toDateString()) {
-    return new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+    return shortTimeFormatter.format(date);
   }
-  return new Intl.DateTimeFormat('ko-KR', { month: '2-digit', day: '2-digit' }).format(date).replace(/\. /g, '.').replace('.', '').trim();
+  return shortDateFormatter.format(date).replace(/\. /g, '.').replace('.', '').trim();
 }
 
 function formatFullDate(value) {
   const date = new Date(value);
-  return new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date);
+  return fullDateFormatter.format(date);
 }
 
 function normalizeTags(value) {
@@ -481,7 +493,7 @@ function applyFilters() {
     const categoryMatch = isAllCategoriesSelected()
       || post.category_id === selectedCategory
       || (!post.category_id && post.category === selectedCategoryName());
-    const textMatch = !query || `${post.title} ${post.content} ${post.author_name} ${(post.tags || []).join(' ')}`.toLocaleLowerCase('ko').includes(query);
+    const textMatch = !query || post._searchText.includes(query);
     return categoryMatch && textMatch;
   });
 }
@@ -499,18 +511,14 @@ function renderImageEditor() {
 }
 
 async function uploadEditorImages() {
-  const paths = [];
-  for (const image of editorImages) {
-    if (image.kind === 'retained') {
-      paths.push(image.path);
-      continue;
-    }
+  const paths = await Promise.all(editorImages.map(async (image) => {
+    if (image.kind === 'retained') return image.path;
     const formData = new FormData();
     formData.append('file', image.file, image.file.name);
     const data = await api('/api/images', { method: 'POST', body: formData });
     if (!data.path) throw new Error('이미지 업로드 결과를 확인하지 못했습니다.');
-    paths.push(data.path);
-  }
+    return data.path;
+  }));
   return normalizeImagePaths(paths);
 }
 
@@ -569,7 +577,7 @@ function renderPosts() {
             <h3>${escapeHtml(post.title)}</h3>
             ${preview ? `<p>${escapeHtml(preview)}</p>` : ''}
             ${post.tags?.length ? `<div class="post-tags">${renderTags(post.tags)}</div>` : ''}
-            <div class="gallery-meta"><span>${escapeHtml(post.author_name)}</span><span>${formatDate(post.created_at)} · 조회 ${Number(post.view_count || 0).toLocaleString('ko-KR')}</span></div>
+            <div class="gallery-meta"><span>${escapeHtml(post.author_name)}</span><span>${formatDate(post.created_at)} · 조회 ${numberFormatter.format(Number(post.view_count || 0))}</span></div>
           </div>
         </article>
       `;
@@ -588,7 +596,7 @@ function renderPosts() {
           <span class="post-title" role="cell"><span class="post-title-text">${post.image_urls?.length ? '<span class="image-indicator">▣</span>' : ''}${escapeHtml(post.title)}</span>${post.tags?.length ? `<span class="post-tags">${renderTags(post.tags)}</span>` : ''}</span>
           <span class="post-author" role="cell">${escapeHtml(post.author_name)}</span>
           <span class="post-date" role="cell">${formatDate(post.created_at)}</span>
-          <span class="post-views" role="cell">${Number(post.view_count || 0).toLocaleString('ko-KR')}</span>
+          <span class="post-views" role="cell">${numberFormatter.format(Number(post.view_count || 0))}</span>
         </div>
       `;
     }).join('');
@@ -810,8 +818,17 @@ function renderAll() {
   renderShortcutList();
   renderPosts();
   renderHeader();
-  renderCategoryManager();
-  renderShortcutManager();
+  // Management lists are invisible during ordinary board use and can be large.
+  if ($('#profileDialog').open) {
+    renderCategoryManager();
+    renderShortcutManager();
+  }
+}
+
+function renderBoardState() {
+  renderCategoryNavigation();
+  renderPosts();
+  renderHeader();
 }
 
 function setCategory(categoryId) {
@@ -819,7 +836,7 @@ function setCategory(categoryId) {
   searchTerm = '';
   currentPage = 1;
   $('#searchInput').value = '';
-  renderAll();
+  renderBoardState();
 }
 
 function openLogin() {
@@ -1264,7 +1281,7 @@ async function copyPostShareLink() {
       link = typeof data.shareUrl === 'string' ? data.shareUrl : shareUrl(shareTag);
       $('#viewerTags').innerHTML = renderTags(selectedPost.tags);
       $('#viewerTags').hidden = normalizeTags(selectedPost.tags).length === 0;
-      renderAll();
+      renderBoardState();
     }
 
     if (!await writeClipboardText(link)) throw new Error('Copy command failed');
@@ -1301,7 +1318,7 @@ async function openViewer(id) {
   $('#shareLinkMessage').textContent = '';
   updateShareButton();
   $('#viewerDialog').showModal();
-  renderAll();
+  renderBoardState();
 }
 
 async function savePost(event) {
@@ -1415,7 +1432,7 @@ function bindEvents() {
     event.preventDefault();
     searchTerm = $('#searchInput').value.trim();
     currentPage = 1;
-    renderAll();
+    renderBoardState();
   });
   $('#postList').addEventListener('click', (event) => {
     const row = event.target.closest('[data-post-id]');
