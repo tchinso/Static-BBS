@@ -1307,7 +1307,7 @@ async function openViewer(id) {
   } catch (error) {
     console.warn(error);
   }
-  $('#viewerCategory').textContent = isConfidential(selectedPost) ? '🔒 기밀 자료' : formatPostCategory(selectedPost);
+  $('#viewerCategory').innerHTML = isConfidential(selectedPost) ? '🔒 기밀 자료' : renderPostCategory(selectedPost);
   $('#viewerTitle').textContent = selectedPost.title;
   $('#viewerMeta').textContent = `${selectedPost.author_name} · ${formatFullDate(selectedPost.created_at)} · 조회 ${Number(selectedPost.view_count || 0).toLocaleString('ko-KR')}`;
   $('#viewerTags').innerHTML = renderTags(selectedPost.tags);
