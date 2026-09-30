@@ -1,5 +1,5 @@
 import { badRequest, crossSiteRequest, isSameOriginRequest, json, readJson, serverError, unauthorized } from '../../_lib/http.js';
-import { deletePost, drainImageCleanupQueue, getPost, isUuid, makePostFields, patchPost, pinLimitError, presentPost } from '../../_lib/board.js';
+import { deletePost, drainImageCleanupQueue, getPost, isUuid, makePostFields, patchPost, noticeLimitError, presentPost } from '../../_lib/board.js';
 import { getAuthorizedSession } from '../../_lib/session.js';
 
 function postId(context) {
@@ -47,7 +47,7 @@ export async function onRequestPatch(context) {
   try {
     const patched = await patchPost(context.env, id, prepared.fields);
     if (!patched.ok) {
-      if (pinLimitError(patched.detail)) return json({ error: '상단 고정 글은 최대 2개까지만 설정할 수 있습니다.' }, 409);
+      if (noticeLimitError(patched.detail)) return json({ error: '공지는 최대 2개까지만 설정할 수 있습니다.' }, 409);
       const detail = Array.isArray(patched.detail) ? patched.detail[0] : patched.detail;
       if (detail?.code === '23503') return badRequest('분류를 확인해주세요.');
       return json({ error: '글을 수정하지 못했습니다. 잠시 후 다시 시도해주세요.' }, 502);

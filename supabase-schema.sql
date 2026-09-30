@@ -264,128 +264,66 @@ begin
 end;
 $$;
 
--- pin_slot은 내부 슬롯입니다. 두 값만 허용하는 check + unique partial index가 최대 두 건을 DB에서 보장합니다.
-create or replace function public.community_enforce_pinned_post_limit()
-returns trigger
-language plpgsql
-security definer
-set search_path = pg_catalog
+-- Existing is_pinned values become stars; keep the API column for compatibility.
+drop trigger if exists community_enforce_pinned_post_limit on public.community_posts;
+drop trigger if exists community_enforce_notice_limit on public.community_posts;
+alter table public.community_posts drop constraint if exists community_posts_pin_slot_check;
+drop index if exists public.community_posts_pinned_slot_idx;
+drop index if exists public.community_posts_notice_slot_idx;
+update public.community_posts set pin_slot = null where pin_slot is not null;
+
+-- Serialize notice promotion and enforce two slots at the database level.
+alter table public.community_posts add column if not exists notice_slot smallint;
+with ranked_notices as (
+  select id, row_number() over (order by created_at desc, id) as slot
+  from public.community_posts where is_notice
+)
+update public.community_posts as post
+set is_notice = ranked_notices.slot <= 2,
+    notice_slot = case when ranked_notices.slot <= 2 then ranked_notices.slot::smallint else null end
+from ranked_notices where post.id = ranked_notices.id;
+
+create or replace function public.community_enforce_notice_limit()
+returns trigger language plpgsql security definer set search_path = pg_catalog
 as $$
-declare
-  pin_state_changed boolean;
-  pin_slot_changed boolean;
-  available_slot smallint;
+declare available_slot smallint;
 begin
-  -- unpinned 행에는 슬롯 값을 남기지 않습니다.
-  if not new.is_pinned then
-    new.pin_slot := null;
-  end if;
-
-  if tg_op = 'INSERT' then
-    pin_state_changed := new.is_pinned;
-    pin_slot_changed := false;
-  else
-    pin_state_changed := new.is_pinned is distinct from old.is_pinned;
-    pin_slot_changed := new.pin_slot is distinct from old.pin_slot;
-  end if;
-
-  if pin_state_changed or pin_slot_changed then
+  if new.is_notice is distinct from coalesce(case when tg_op = 'UPDATE' then old.is_notice end, false)
+    or (tg_op = 'UPDATE' and new.is_pinned is distinct from old.is_pinned)
+    or (tg_op = 'INSERT' and new.is_pinned) then
     if coalesce(auth.role(), '') <> 'service_role'
-      and (
-        auth.uid() is null
-        or not public.community_has_board_role(array['admin'])
-      ) then
-      raise exception 'Only administrators can change a post pin.' using errcode = '42501';
+      and not public.community_has_board_role(array['admin']) then
+      raise exception 'Only administrators can change notices or stars.' using errcode = '42501';
     end if;
   end if;
-
-  if pin_state_changed then
-    -- 슬롯 선택을 직렬화해 정상적인 동시 요청도 가능한 한 충돌 없이 처리합니다.
+  if not new.is_notice then
+    new.notice_slot := null;
+  elsif tg_op = 'INSERT' or not old.is_notice then
     perform pg_catalog.pg_advisory_xact_lock(74291, 1);
-
-    if new.is_pinned then
-      select candidate.slot::smallint
-      into available_slot
-      from (values (1), (2)) as candidate(slot)
-      where not exists (
-        select 1
-        from public.community_posts as existing_post
-        where existing_post.is_pinned
-          and existing_post.pin_slot = candidate.slot
-      )
-      order by candidate.slot
-      limit 1;
-
-      if not found then
-        raise exception 'At most two posts may be pinned.' using errcode = '23514';
-      end if;
-
-      new.pin_slot := available_slot;
+    select candidate.slot::smallint into available_slot
+    from (values (1), (2)) as candidate(slot)
+    where not exists (select 1 from public.community_posts p where p.notice_slot = candidate.slot)
+    order by candidate.slot limit 1;
+    if not found then
+      raise exception 'At most two notices are allowed.' using errcode = '23514';
     end if;
-  elsif pin_slot_changed and new.is_pinned then
-    -- slot은 trigger가 정하며, 이미 고정된 글의 slot을 직접 바꾸지 못하게 합니다.
-    raise exception 'Pinned slots are managed by the database.' using errcode = '42501';
+    new.notice_slot := available_slot;
+  elsif new.notice_slot is distinct from old.notice_slot then
+    raise exception 'Notice slots are managed by the database.' using errcode = '42501';
   end if;
-
+  new.pin_slot := null;
   return new;
 end;
 $$;
-
--- 기존에 이 열을 직접 추가한 배포본의 데이터는 자동으로 고정 해제하지 않습니다.
-do $$
-begin
-  if (select count(*) from public.community_posts where is_pinned) > 2 then
-    raise exception 'community_posts already contains more than two pinned posts; unpin extras before applying this migration.';
-  end if;
-end;
-$$;
-
--- 기존 데이터에는 재실행해도 같은 순서로 slot을 채웁니다.
-with ranked_pins as (
-  select id, cast(row_number() over (order by created_at desc, id) as smallint) as slot
-  from public.community_posts
-  where is_pinned
-)
-update public.community_posts as post
-set pin_slot = ranked_pins.slot
-from ranked_pins
-where post.id = ranked_pins.id;
-
-update public.community_posts
-set pin_slot = null
-where not is_pinned
-  and pin_slot is not null;
-
-do $$
-begin
-  if not exists (
-    select 1
-    from pg_constraint
-    where conrelid = 'public.community_posts'::regclass
-      and conname = 'community_posts_pin_slot_check'
-  ) then
-    alter table public.community_posts
-      add constraint community_posts_pin_slot_check
-      check (
-        is_pinned = (pin_slot is not null)
-        and (pin_slot is null or pin_slot between 1 and 2)
-      );
-  end if;
-end;
-$$;
-
-create unique index if not exists community_posts_pinned_slot_idx
-  on public.community_posts(pin_slot)
-  where is_pinned;
-
-create index if not exists community_posts_pinned_created_at_idx
-  on public.community_posts(created_at desc)
-  where is_pinned;
-
-drop trigger if exists community_enforce_pinned_post_limit on public.community_posts;
-create trigger community_enforce_pinned_post_limit
-  before insert or update of is_pinned, pin_slot on public.community_posts
-  for each row execute procedure public.community_enforce_pinned_post_limit();
+revoke all on function public.community_enforce_notice_limit() from public, anon, authenticated;
+drop trigger if exists community_enforce_notice_limit on public.community_posts;
+create trigger community_enforce_notice_limit
+before insert or update of is_notice, notice_slot, is_pinned, pin_slot on public.community_posts
+for each row execute function public.community_enforce_notice_limit();
+alter table public.community_posts drop constraint if exists community_posts_notice_slot_check;
+alter table public.community_posts add constraint community_posts_notice_slot_check
+check (is_notice = (notice_slot is not null) and (notice_slot is null or notice_slot between 1 and 2));
+create unique index if not exists community_posts_notice_slot_idx on public.community_posts(notice_slot) where is_notice;
 
 -- Storage and Postgres are separate systems. Keep a durable queue in the same
 -- transaction as a post/image-reference change, then let Pages delete the
@@ -545,7 +483,8 @@ begin
   -- A two-pass update preserves the unique sort_order constraint while the
   -- requested order swaps adjacent rows.
   update public.community_categories
-  set sort_order = sort_order + 1000000;
+  set sort_order = sort_order + 1000000
+  where id is not null;
 
   with requested_order as (
     select id, (ordinal_position - 1)::integer as sort_order
@@ -625,7 +564,8 @@ begin
   where id = category_id_value;
 
   update public.community_categories
-  set sort_order = sort_order + 1000000;
+  set sort_order = sort_order + 1000000
+  where id is not null;
 
   with ordered_categories as (
     select id, (row_number() over (order by sort_order, name) - 1)::integer as sort_order
@@ -745,7 +685,8 @@ begin
   -- A two-pass update preserves the unique sort_order constraint while the
   -- requested order swaps adjacent rows.
   update public.community_shortcuts
-  set sort_order = sort_order + 1000000;
+  set sort_order = sort_order + 1000000
+  where id is not null;
 
   with requested_order as (
     select id, (ordinal_position - 1)::integer as sort_order
@@ -785,7 +726,8 @@ begin
   where id = shortcut_id_value;
 
   update public.community_shortcuts
-  set sort_order = sort_order + 1000000;
+  set sort_order = sort_order + 1000000
+  where id is not null;
 
   with ordered_shortcuts as (
     select id, (row_number() over (order by sort_order, title) - 1)::integer as sort_order
@@ -872,7 +814,7 @@ revoke all on function public.community_handle_new_user() from public, anon, aut
 revoke all on function public.community_email_is_allowed() from public, anon;
 revoke all on function public.community_has_board_role(text[]) from public, anon;
 revoke all on function public.community_increment_post_views(uuid) from public, anon;
-revoke all on function public.community_enforce_pinned_post_limit() from public, anon, authenticated;
+revoke all on function public.community_enforce_notice_limit() from public, anon, authenticated;
 revoke all on function public.community_queue_image_cleanup() from public, anon, authenticated;
 revoke all on function public.community_create_category(text) from public, anon, authenticated;
 revoke all on function public.community_rename_category(uuid, text) from public, anon, authenticated;

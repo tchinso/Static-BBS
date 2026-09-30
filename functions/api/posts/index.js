@@ -1,5 +1,5 @@
 import { badRequest, crossSiteRequest, isSameOriginRequest, json, readJson, serverError, unauthorized } from '../../_lib/http.js';
-import { createPost, ensureAdminProfile, listPosts, makePostFields, pinLimitError, presentPost } from '../../_lib/board.js';
+import { createPost, ensureAdminProfile, listPosts, makePostFields, noticeLimitError, presentPost } from '../../_lib/board.js';
 import { getAuthorizedSession } from '../../_lib/session.js';
 
 async function authenticated(context) {
@@ -34,7 +34,7 @@ export async function onRequestPost(context) {
     if (prepared.error) return badRequest(prepared.error);
     const created = await createPost(context.env, prepared.fields);
     if (!created.ok) {
-      if (pinLimitError(created.detail)) return json({ error: '상단 고정 글은 최대 2개까지만 설정할 수 있습니다.' }, 409);
+      if (noticeLimitError(created.detail)) return json({ error: '공지는 최대 2개까지만 설정할 수 있습니다.' }, 409);
       const detail = Array.isArray(created.detail) ? created.detail[0] : created.detail;
       if (detail?.code === '23503') return badRequest('분류를 확인해주세요.');
       return json({ error: '글을 저장하지 못했습니다. 잠시 후 다시 시도해주세요.' }, 502);

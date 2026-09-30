@@ -141,7 +141,8 @@ begin
   -- A two-pass update preserves the unique sort_order constraint while the
   -- requested order swaps adjacent rows.
   update public.community_shortcuts
-  set sort_order = sort_order + 1000000;
+  set sort_order = sort_order + 1000000
+  where id is not null;
 
   with requested_order as (
     select id, (ordinal_position - 1)::integer as sort_order
@@ -181,7 +182,8 @@ begin
   where id = shortcut_id_value;
 
   update public.community_shortcuts
-  set sort_order = sort_order + 1000000;
+  set sort_order = sort_order + 1000000
+  where id is not null;
 
   with ordered_shortcuts as (
     select id, (row_number() over (order by sort_order, title) - 1)::integer as sort_order

@@ -214,7 +214,7 @@ export async function updateDisplayName(env, userId, displayName) {
 export async function listPosts(env) {
   const result = await supabaseJson(env, restQuery('community_posts', {
     select: POST_SELECT,
-    order: 'is_pinned.desc,pin_slot.asc.nullslast,is_notice.desc,created_at.desc'
+    order: 'created_at.desc,id.desc'
   }));
   if (!result.response.ok || !Array.isArray(result.data)) throw new Error('Post lookup failed.');
   return result.data.map((post) => presentPost(post, env));
@@ -275,7 +275,7 @@ export function makePostFields(body, env, { creating = false, profile = null, us
     fields.image_urls = imageUrls;
   }
   if (!writeBoolean(body, 'is_notice', fields) || !writeBoolean(body, 'is_pinned', fields) || !writeBoolean(body, 'is_confidential', fields)) {
-    return { error: '고정, 공지 또는 기밀 자료 설정을 확인해주세요.' };
+    return { error: '별표, 공지 또는 기밀 자료 설정을 확인해주세요.' };
   }
 
   if (creating) {
@@ -447,7 +447,7 @@ export async function incrementPostView(env, id, accessToken) {
   return result.response.ok;
 }
 
-export function pinLimitError(detail) {
+export function noticeLimitError(detail) {
   const source = Array.isArray(detail) ? detail[0] : detail;
-  return source?.code === '23514' || /pinned|pin/i.test(String(source?.message || ''));
+  return ['23514', '23505'].includes(source?.code) && /notice/i.test(String(source?.message || ''));
 }

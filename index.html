@@ -65,7 +65,7 @@
         <div class="board-toolbar">
           <div>
             <span class="eyebrow" id="boardEyebrow">ALL POSTS</span>
-            <h2 id="boardTitle">전체글보기</h2>
+            <div class="board-title-row"><h2 id="boardTitle">전체글보기</h2><button id="starFilterButton" class="star-filter" type="button" aria-pressed="false" aria-label="별표 메모 보기"><span aria-hidden="true">★</span><span id="starCount" class="star-count" hidden></span></button></div>
           </div>
           <div class="board-controls">
             <div class="view-toggle" role="group" aria-label="게시글 보기 방식">
@@ -123,8 +123,8 @@
       <p class="upload-help">JPG, PNG, WEBP, GIF · 한 장당 25MB 이하 · 최대 10장 · 이미지를 드래그해 순서를 바꿀 수 있어요.</p>
       <div class="image-editor-list" id="imageEditorList"></div>
       <div class="editor-options">
-        <label class="check-label"><input id="postPinned" type="checkbox"> 최상단 고정 (최대 2개)</label>
-        <label class="check-label"><input id="postNotice" type="checkbox"> 공지글로 등록</label>
+        <label class="check-label"><input id="postPinned" type="checkbox"> 별표</label>
+        <label class="check-label"><input id="postNotice" type="checkbox"> 공지글로 등록 (최대 2개)</label>
         <label class="check-label"><input id="postConfidential" type="checkbox"> 기밀 자료로 지정</label>
       </div>
       <div class="form-message" id="editorMessage" role="status"></div>

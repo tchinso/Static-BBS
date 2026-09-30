@@ -69,6 +69,10 @@ function clearBoardState() {
     const element = $(selector);
     if (element) element.replaceChildren();
   });
+  $('#starCount').hidden = true;
+  $('#starCount').textContent = '';
+  $('#starFilterButton').setAttribute('aria-pressed', 'false');
+  $('#starFilterButton').setAttribute('aria-label', '별표 메모 보기');
   const noticeStrip = $('#noticeStrip');
   if (noticeStrip) {
     noticeStrip.replaceChildren();
@@ -189,7 +193,7 @@ function selectedCategoryName() {
 }
 
 function reconcileSelectedCategory() {
-  if (!isAllCategoriesSelected() && !categoryById(selectedCategory)) selectedCategory = '전체글';
+  if (!isAllCategoriesSelected() && selectedCategory !== '별표' && !categoryById(selectedCategory)) selectedCategory = '전체글';
 }
 
 function rememberLoginEnabled() {
@@ -490,7 +494,7 @@ function applyBoardData(data) {
 function applyFilters() {
   const query = searchTerm.toLocaleLowerCase('ko');
   filteredPosts = posts.filter((post) => {
-    const categoryMatch = isAllCategoriesSelected()
+    const categoryMatch = selectedCategory === '별표' ? post.is_pinned : isAllCategoriesSelected()
       || post.category_id === selectedCategory
       || (!post.category_id && post.category === selectedCategoryName());
     const textMatch = !query || post._searchText.includes(query);
@@ -522,12 +526,8 @@ async function uploadEditorImages() {
   return normalizeImagePaths(paths);
 }
 
-function formatPostCategory(post) {
-  return `${post.is_notice ? '공지 ' : ''}${post.is_pinned ? '📌 ' : ''}${post.category || ''}`.trim();
-}
-
 function renderPostCategory(post) {
-  return `${post.is_notice ? '<span class="notice-label">공지</span>' : ''}${post.is_pinned ? '<span class="pin" aria-label="고정">📌</span>' : ''}<span class="category-name">${escapeHtml(post.category)}</span>`;
+  return `${post.is_notice ? '<span class="notice-label">공지</span>' : ''}${post.is_pinned ? '<span class="post-star" aria-label="별표">★</span>' : ''}<span class="category-name">${escapeHtml(post.category)}</span>`;
 }
 
 function summarizeNoticeContent(value, maxLength = 240) {
@@ -558,22 +558,22 @@ function renderPosts() {
       if (isConfidential(post)) {
         return `
           <article class="gallery-card is-confidential" role="listitem" tabindex="0" data-post-id="${escapeHtml(post.id)}" aria-label="기밀 자료: ${escapeHtml(post.title)}">
-            <div class="gallery-confidential-title"><h3>🔒 ${escapeHtml(post.title)}</h3></div>
+            <div class="gallery-confidential-title"><h3>🔒 ${post.is_pinned ? '<span class="post-star" aria-label="별표">★</span> ' : ''}${escapeHtml(post.title)}</h3></div>
           </article>
         `;
       }
       const firstImage = post.image_urls?.[0];
       const preview = String(post.content || '').replace(/\s+/g, ' ').trim();
       return `
-        <article class="gallery-card ${firstImage ? '' : 'has-no-image'} ${post.is_notice ? 'is-notice' : ''} ${post.is_pinned ? 'is-pinned' : ''}" role="listitem" tabindex="0" data-post-id="${escapeHtml(post.id)}">
+        <article class="gallery-card ${firstImage ? '' : 'has-no-image'} ${post.is_notice ? 'is-notice' : ''} ${post.is_pinned ? 'is-starred' : ''}" role="listitem" tabindex="0" data-post-id="${escapeHtml(post.id)}">
           ${firstImage ? `
             <div class="gallery-thumb">
               <img src="${escapeHtml(imageUrl(firstImage))}" alt="${escapeHtml(post.title)}" loading="lazy">
-              <span class="gallery-category">${escapeHtml(formatPostCategory(post))}</span>
+              <span class="gallery-category">${renderPostCategory(post)}</span>
             </div>
           ` : ''}
           <div class="gallery-body">
-            ${firstImage ? '' : `<span class="gallery-category">${escapeHtml(formatPostCategory(post))}</span>`}
+            ${firstImage ? '' : `<span class="gallery-category">${renderPostCategory(post)}</span>`}
             <h3>${escapeHtml(post.title)}</h3>
             ${preview ? `<p>${escapeHtml(preview)}</p>` : ''}
             ${post.tags?.length ? `<div class="post-tags">${renderTags(post.tags)}</div>` : ''}
@@ -586,12 +586,12 @@ function renderPosts() {
       if (isConfidential(post)) {
         return `
           <div class="post-row post-item is-confidential" role="row" tabindex="0" data-post-id="${escapeHtml(post.id)}" aria-label="기밀 자료: ${escapeHtml(post.title)}">
-            <span class="post-title" role="cell"><span class="post-title-text">🔒 ${escapeHtml(post.title)}</span></span>
+            <span class="post-title" role="cell"><span class="post-title-text">🔒 ${post.is_pinned ? '<span class="post-star" aria-label="별표">★</span> ' : ''}${escapeHtml(post.title)}</span></span>
           </div>
         `;
       }
       return `
-        <div class="post-row post-item ${post.is_notice ? 'is-notice' : ''} ${post.is_pinned ? 'is-pinned' : ''}" role="row" tabindex="0" data-post-id="${escapeHtml(post.id)}">
+        <div class="post-row post-item ${post.is_notice ? 'is-notice' : ''} ${post.is_pinned ? 'is-starred' : ''}" role="row" tabindex="0" data-post-id="${escapeHtml(post.id)}">
           <span class="post-category" role="cell">${renderPostCategory(post)}</span>
           <span class="post-title" role="cell"><span class="post-title-text">${post.image_urls?.length ? '<span class="image-indicator">▣</span>' : ''}${escapeHtml(post.title)}</span>${post.tags?.length ? `<span class="post-tags">${renderTags(post.tags)}</span>` : ''}</span>
           <span class="post-author" role="cell">${escapeHtml(post.author_name)}</span>
@@ -613,20 +613,18 @@ function renderNotices() {
     strip.hidden = true;
     return;
   }
-  if (noticePosts.length === 1 && !isConfidential(noticePosts[0])) {
-    const [post] = noticePosts;
+  strip.innerHTML = notices.map((post) => {
+    if (isConfidential(post)) return `<button type="button" data-post-id="${escapeHtml(post.id)}"><b>공지</b> 🔒 ${escapeHtml(post.title)}</button>`;
     const content = summarizeNoticeContent(post.content);
     const firstImage = post.image_urls?.[0];
-    strip.innerHTML = `
+    return `
       <button class="notice-single ${firstImage ? 'has-image' : ''}" type="button" data-post-id="${escapeHtml(post.id)}">
         <span class="notice-heading"><b>공지</b><strong>${escapeHtml(post.title)}</strong></span>
         ${content ? `<span class="notice-content">${escapeHtml(content)}</span>` : ''}
         ${firstImage ? `<img class="notice-thumbnail" src="${escapeHtml(imageUrl(firstImage))}" alt="" loading="lazy" decoding="async">` : ''}
       </button>
     `;
-  } else {
-    strip.innerHTML = notices.map((post) => `<button type="button" data-post-id="${escapeHtml(post.id)}"><b>공지</b> ${escapeHtml(post.title)}</button>`).join('');
-  }
+  }).join('');
   strip.hidden = false;
 }
 
@@ -807,8 +805,13 @@ function renderShortcutManager() {
 
 function renderHeader() {
   const categoryName = selectedCategoryName();
-  $('#boardTitle').textContent = searchTerm ? `'${searchTerm}' 검색 결과` : isAllCategoriesSelected() ? '전체글보기' : categoryName;
+  $('#boardTitle').textContent = searchTerm ? `'${searchTerm}' 검색 결과` : isAllCategoriesSelected() ? '전체글보기' : selectedCategory === '별표' ? '별표 메모' : categoryName;
   $('#boardEyebrow').textContent = searchTerm ? 'SEARCH RESULT' : isAllCategoriesSelected() ? 'ALL POSTS' : 'CATEGORY';
+  const starCount = posts.filter((post) => post.is_pinned).length;
+  $('#starFilterButton').setAttribute('aria-pressed', String(selectedCategory === '별표'));
+  $('#starCount').hidden = starCount === 0;
+  $('#starCount').textContent = starCount > 9 ? '9+' : String(starCount);
+  $('#starFilterButton').setAttribute('aria-label', `별표 메모 ${starCount}개 보기`);
   $('#loginButton').textContent = currentUser ? `${currentProfile?.display_name || '관리자'} · 프로필/설정` : '로그인';
 }
 
@@ -1175,7 +1178,7 @@ function openEditor(post = null) {
   selectedPost = post;
   $('#editorTitle').textContent = post ? '글 수정' : '새 글 작성';
   $('#postId').value = post?.id || '';
-  $('#postCategory').value = post?.category_id || categoryIdByName(post?.category) || (!isAllCategoriesSelected() ? selectedCategory : categories[0].id);
+  $('#postCategory').value = post?.category_id || categoryIdByName(post?.category) || (categoryById(selectedCategory) ? selectedCategory : categories[0].id);
   $('#postAuthor').value = post?.author_name || currentProfile.display_name || '';
   $('#postAuthor').readOnly = true;
   $('#postTitle').value = post?.title || '';
@@ -1339,8 +1342,8 @@ async function savePost(event) {
     return;
   }
   try {
-    if (payload.is_pinned && !original?.is_pinned && posts.filter((post) => post.is_pinned).length >= 2) {
-      throw new Error('최상단 고정은 최대 2개까지만 가능합니다.');
+    if (payload.is_notice && !original?.is_notice && posts.filter((post) => post.is_notice).length >= 2) {
+      throw new Error('공지는 최대 2개까지만 가능합니다.');
     }
     payload.image_urls = await uploadEditorImages();
     if (id) {
@@ -1444,6 +1447,7 @@ function bindEvents() {
       if (row) { event.preventDefault(); void openViewer(row.dataset.postId); }
     }
   });
+  $('#starFilterButton').addEventListener('click', () => setCategory(selectedCategory === '별표' ? '전체글' : '별표'));
   $('#noticeStrip').addEventListener('click', (event) => {
     const button = event.target.closest('[data-post-id]');
     if (button) void openViewer(button.dataset.postId);
