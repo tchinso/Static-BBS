@@ -80,6 +80,7 @@ function clearBoardState() {
   $('#starCount').hidden = true;
   $('#starCount').textContent = '';
   $('#starFilterButton').setAttribute('aria-pressed', 'false');
+  $('#starFilterButton').setAttribute('data-empty', 'true');
   $('#starFilterButton').setAttribute('aria-label', '별표 메모 보기');
   const noticeStrip = $('#noticeStrip');
   if (noticeStrip) {
@@ -840,6 +841,7 @@ function renderHeader() {
   $('#boardEyebrow').textContent = searchTerm ? 'SEARCH RESULT' : isAllCategoriesSelected() ? 'ALL POSTS' : 'CATEGORY';
   const starCount = posts.filter((post) => post.is_pinned).length;
   $('#starFilterButton').setAttribute('aria-pressed', String(selectedCategory === '별표'));
+  $('#starFilterButton').setAttribute('data-empty', String(starCount === 0));
   $('#starCount').hidden = starCount === 0;
   $('#starCount').textContent = starCount > 9 ? '9+' : String(starCount);
   $('#starFilterButton').setAttribute('aria-label', `별표 메모 ${starCount}개 보기`);

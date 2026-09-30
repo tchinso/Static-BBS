@@ -40,6 +40,7 @@ test('star badge hides at zero, counts normally and caps at 9+', () => {
     run(`posts = Array.from({length:${count}}, () => ({is_pinned:true})); renderHeader();`);
     assert.equal(elements.get('#starCount').textContent, text);
     assert.equal(elements.get('#starCount').hidden, hidden);
+    assert.equal(elements.get('#starFilterButton').attributes['data-empty'], String(count === 0));
   }
   run(`selectedCategory = '별표'; renderHeader();`);
   assert.equal(elements.get('#starFilterButton').attributes['aria-pressed'], 'true');

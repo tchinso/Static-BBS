@@ -316,6 +316,7 @@ a { color: inherit; text-decoration: none; }
 .board-title-row { display: flex; align-items: center; gap: 12px; }
 .star-filter { position: relative; border: 1px solid #e0ad00; border-radius: 9px; padding: 3px 9px; background: #fff9d1; color: #ffd000; font-size: 28px; line-height: 1.2; cursor: pointer; text-shadow: 0 1px 1px #9c7100; }
 .star-filter[aria-pressed="true"] { background: #ffe550; box-shadow: 0 0 0 3px #ffd00066; }
+.star-filter[data-empty="true"] { color: white; background: #f4f5f7; border-color: #e1e4e8; text-shadow: none; box-shadow: none; }
 .star-count { position: absolute; top: -8px; right: -10px; display: flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 4px; border-radius: 50%; background: #ef172c; color: white; font-size: 12px; font-weight: 900; text-shadow: none; border: 2px solid white; }
 .star-count[hidden] { display: none; }
 .post-star { display: inline-block; flex: 0 0 auto; color: #ffd000; font-size: 22px; line-height: 1; text-shadow: 0 1px 1px #996b00, 0 0 5px #ffe600; vertical-align: middle; }
