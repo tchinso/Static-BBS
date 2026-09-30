@@ -1,8 +1,11 @@
+import { objectKey } from './shared/validation.js';
+import { MAX_IMAGES, MAX_UPLOAD_BYTES, IMAGE_TYPES, MAX_SHORTCUT_URL, attachmentLimitError } from './shared/limits.js';
+import { uploadEntries, discardEntries, formatBytes } from './client/uploads.js';
 const boardConfig = window.BOARD_CONFIG || {};
 const viewModeStorageKey = 'nyangcatmemoBoardViewMode';
 const rememberLoginSettingKey = 'nyangcatmemoRememberLogin';
 const pageSize = 10;
-const maxImagesPerPost = 10;
+const maxImagesPerPost = MAX_IMAGES;
 const shareTagPattern = /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z\d]{6}$/;
 const pendingSharedSearchStorageKey = 'nyangcatmemoPendingSharedSearch';
 const pendingSharedSearchMaxAge = 60 * 60 * 1000;
@@ -23,6 +26,8 @@ let currentPage = 1;
 let viewMode = localStorage.getItem(viewModeStorageKey) === 'gallery' ? 'gallery' : 'list';
 let selectedPost = null;
 let editorImages = [];
+let editorAttachments = [];
+let editorSaving = false;
 let editorIsDirty = false;
 let draggedImageIndex = null;
 let editingCategoryId = null;
@@ -55,6 +60,9 @@ function clearBoardState() {
   filteredPosts = [];
   selectedPost = null;
   editorImages = [];
+  editorAttachments = [];
+  editorSaving = false;
+  $('#postForm').inert = false;
   editorIsDirty = false;
   draggedImageIndex = null;
   editingCategoryId = null;
@@ -65,7 +73,7 @@ function clearBoardState() {
   selectedCategory = '전체글';
   searchTerm = '';
 
-  ['#categoryNav', '#postCategory', '#categoryList', '#shortcutList', '#shortcutSettingsList', '#postList', '#pagination', '#viewerTags', '#viewerImages', '#imageEditorList', '#shareLinkMessage'].forEach((selector) => {
+  ['#categoryNav', '#postCategory', '#categoryList', '#shortcutList', '#shortcutSettingsList', '#postList', '#pagination', '#viewerTags', '#viewerImages', '#viewerAttachments', '#attachmentEditorList', '#imageEditorList', '#shareLinkMessage'].forEach((selector) => {
     const element = $(selector);
     if (element) element.replaceChildren();
   });
@@ -167,7 +175,8 @@ function normalizePost(post) {
   const relation = postCategoryRelation(post);
   const categoryId = String(post?.category_id ?? relation?.id ?? categoryIdByName(post?.category_name ?? (typeof relation === 'string' ? relation : ''))).trim();
   const categoryName = String(
-    post?.category_name
+    categoryById(categoryId)?.name
+    ?? post?.category_name
     ?? relation?.name
     ?? (typeof relation === 'string' ? relation : null)
     ?? categoryById(categoryId)?.name
@@ -179,6 +188,7 @@ function normalizePost(post) {
     category_id: categoryId,
     category: categoryName,
     image_urls: normalizeImagePaths(post?.image_urls),
+    attachments: Array.isArray(post?.attachments) ? post.attachments : [],
     tags: normalizedTags,
     _searchText: `${post?.title || ''} ${post?.content || ''} ${post?.author_name || ''} ${normalizedTags.join(' ')}`.toLocaleLowerCase('ko')
   };
@@ -407,7 +417,7 @@ function shareUrl(shareTag) {
 function normalizeImagePaths(values) {
   return [...new Set((Array.isArray(values) ? values : [])
     .map((value) => String(value || '').trim().replace(/^\/+/, ''))
-    .filter((value) => value && !value.includes('..') && !/^https?:\/\//i.test(value)))];
+    .filter(objectKey))];
 }
 
 function imageUrl(path) {
@@ -514,16 +524,37 @@ function renderImageEditor() {
   `).join('');
 }
 
-async function uploadEditorImages() {
-  const paths = await Promise.all(editorImages.map(async (image) => {
-    if (image.kind === 'retained') return image.path;
-    const formData = new FormData();
-    formData.append('file', image.file, image.file.name);
-    const data = await api('/api/images', { method: 'POST', body: formData });
-    if (!data.path) throw new Error('이미지 업로드 결과를 확인하지 못했습니다.');
-    return data.path;
-  }));
-  return normalizeImagePaths(paths);
+function renderAttachmentEditor() {
+  $('#attachmentEditorList').innerHTML = editorAttachments.map((entry, index) => {
+    const file = entry.kind === 'retained' ? entry.attachment : entry.file;
+    return `<div class="attachment-row"><span class="attachment-name">📎 ${escapeHtml(file.name)}</span><span class="attachment-size">${formatBytes(file.size)}</span><button type="button" data-remove-attachment="${index}" aria-label="${escapeHtml(file.name)} 첨부 삭제">삭제</button></div>`;
+  }).join('');
+  const size = editorAttachments.reduce((total, entry) => total + (entry.kind === 'retained' ? entry.attachment.size : entry.file.size), 0);
+  $('#attachmentUsage').textContent = `${editorAttachments.length}/8개 · ${formatBytes(size)} / 25MB (이미지 제외)`;
+}
+
+function renderViewerAttachments(post) {
+  const files = post.attachments || [];
+  $('#viewerAttachments').hidden = files.length === 0;
+  $('#viewerAttachments').innerHTML = files.map((file) => `<a class="attachment-row" href="/api/files/${file.path.split('/').map(encodeURIComponent).join('/')}" download="${escapeHtml(file.name)}"><span class="attachment-name">📎 ${escapeHtml(file.name)}</span><span class="attachment-size">${formatBytes(file.size)}</span><span>다운로드 ↓</span></a>`).join('');
+}
+
+async function uploadEditorMedia() {
+  await uploadEntries([...editorImages, ...editorAttachments], api);
+  return {
+    image_urls: normalizeImagePaths(editorImages.map((entry) => entry.kind === 'retained' ? entry.path : entry.uploaded.path)),
+    attachments: editorAttachments.map((entry) => entry.kind === 'retained' ? entry.attachment : entry.uploaded)
+  };
+}
+
+function discardEditorUploads() {
+  discardEntries([...editorImages, ...editorAttachments], api);
+}
+
+function recomputeCategoryCounts() {
+  const counts = new Map();
+  for (const post of posts) counts.set(post.category_id, (counts.get(post.category_id) || 0) + 1);
+  categories = categories.map((category) => ({ ...category, post_count: counts.get(category.id) || 0 }));
 }
 
 function renderPostCategory(post) {
@@ -574,7 +605,7 @@ function renderPosts() {
           ` : ''}
           <div class="gallery-body">
             ${firstImage ? '' : `<span class="gallery-category">${renderPostCategory(post)}</span>`}
-            <h3>${escapeHtml(post.title)}</h3>
+            <h3>${post.attachments?.length ? '<span class="attachment-indicator" aria-label="첨부파일 있음">📎</span> ' : ''}${escapeHtml(post.title)}</h3>
             ${preview ? `<p>${escapeHtml(preview)}</p>` : ''}
             ${post.tags?.length ? `<div class="post-tags">${renderTags(post.tags)}</div>` : ''}
             <div class="gallery-meta"><span>${escapeHtml(post.author_name)}</span><span>${formatDate(post.created_at)} · 조회 ${numberFormatter.format(Number(post.view_count || 0))}</span></div>
@@ -593,7 +624,7 @@ function renderPosts() {
       return `
         <div class="post-row post-item ${post.is_notice ? 'is-notice' : ''} ${post.is_pinned ? 'is-starred' : ''}" role="row" tabindex="0" data-post-id="${escapeHtml(post.id)}">
           <span class="post-category" role="cell">${renderPostCategory(post)}</span>
-          <span class="post-title" role="cell"><span class="post-title-text">${post.image_urls?.length ? '<span class="image-indicator">▣</span>' : ''}${escapeHtml(post.title)}</span>${post.tags?.length ? `<span class="post-tags">${renderTags(post.tags)}</span>` : ''}</span>
+          <span class="post-title" role="cell"><span class="post-title-text">${post.image_urls?.length ? '<span class="image-indicator">▣</span>' : ''}${post.attachments?.length ? '<span class="attachment-indicator" aria-label="첨부파일 있음">📎</span>' : ''}${escapeHtml(post.title)}</span>${post.tags?.length ? `<span class="post-tags">${renderTags(post.tags)}</span>` : ''}</span>
           <span class="post-author" role="cell">${escapeHtml(post.author_name)}</span>
           <span class="post-date" role="cell">${formatDate(post.created_at)}</span>
           <span class="post-views" role="cell">${numberFormatter.format(Number(post.view_count || 0))}</span>
@@ -778,7 +809,7 @@ function renderShortcutManager() {
               <label class="sr-only" for="shortcutEditTitle-${escapeHtml(shortcut.id)}">바로가기 제목</label>
               <input id="shortcutEditTitle-${escapeHtml(shortcut.id)}" name="title" maxlength="100" value="${escapeHtml(shortcut.title)}" required>
               <label class="sr-only" for="shortcutEditUrl-${escapeHtml(shortcut.id)}">바로가기 주소</label>
-              <input id="shortcutEditUrl-${escapeHtml(shortcut.id)}" name="url" type="url" maxlength="2048" value="${escapeHtml(shortcut.url)}" required>
+              <input id="shortcutEditUrl-${escapeHtml(shortcut.id)}" name="url" type="url" maxlength="4096" value="${escapeHtml(shortcut.url)}" required>
               <div class="shortcut-edit-actions">
                 <button class="button button-primary" type="submit">저장</button>
                 <button class="button button-ghost" type="button" data-shortcut-cancel-edit>취소</button>
@@ -881,8 +912,10 @@ async function saveProfile(event) {
   }
   message.textContent = '저장 중...';
   try {
-    await api('/api/profile', { method: 'PATCH', body: JSON.stringify({ display_name: displayName }) });
-    await loadBoard();
+    const data = await api('/api/profile', { method: 'PATCH', body: JSON.stringify({ display_name: displayName }) });
+    currentProfile = data.profile;
+    posts = posts.map((post) => post.author_id === currentUser.id ? normalizePost({ ...post, author_name: data.profile.display_name }) : post);
+    renderAll();
     message.textContent = '프로필을 저장했습니다.';
     setTimeout(() => $('#profileDialog').open && $('#profileDialog').close(), 500);
   } catch (error) {
@@ -905,9 +938,10 @@ async function addCategory(event) {
   }
   setCategoryMessage('카테고리를 추가하는 중...');
   try {
-    await api('/api/categories', { method: 'POST', body: JSON.stringify({ name }) });
+    const data = await api('/api/categories', { method: 'POST', body: JSON.stringify({ name }) });
+    categories = normalizeCategories([...categories, data.category]);
     input.value = '';
-    await loadBoard();
+    renderAll();
     setCategoryMessage('카테고리를 추가했습니다.');
   } catch (error) {
     setCategoryMessage(error.message || '카테고리를 추가하지 못했습니다.');
@@ -948,9 +982,12 @@ async function saveCategoryRename(event) {
   }
   setCategoryMessage('카테고리 이름을 저장하는 중...');
   try {
-    await api(`/api/categories/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+    const data = await api(`/api/categories/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+    categories = normalizeCategories(categories.map((category) => category.id === id ? data.category : category));
+    posts = posts.map(normalizePost);
+    recomputeCategoryCounts();
     editingCategoryId = null;
-    await loadBoard();
+    renderAll();
     setCategoryMessage('카테고리 이름을 변경했습니다.');
   } catch (error) {
     setCategoryMessage(error.message || '카테고리 이름을 변경하지 못했습니다.');
@@ -965,11 +1002,13 @@ async function moveCategory(id, direction) {
   [reordered[index], reordered[destination]] = [reordered[destination], reordered[index]];
   setCategoryMessage('카테고리 순서를 저장하는 중...');
   try {
-    await api('/api/categories/order', {
+    const data = await api('/api/categories/order', {
       method: 'PATCH',
       body: JSON.stringify({ category_ids: reordered.map((category) => category.id) })
     });
-    await loadBoard();
+    categories = normalizeCategories(data.categories);
+    recomputeCategoryCounts();
+    renderAll();
     setCategoryMessage('카테고리 순서를 변경했습니다.');
   } catch (error) {
     setCategoryMessage(error.message || '카테고리 순서를 변경하지 못했습니다.');
@@ -1020,8 +1059,12 @@ async function deleteCategory() {
       body: JSON.stringify(replacementId ? { replacement_id: replacementId } : {})
     });
     if (selectedPost?.category_id === target.id) selectedPost = null;
+    categories = categories.filter((category) => category.id !== target.id);
+    posts = posts.map((post) => post.category_id === target.id ? normalizePost({ ...post, category_id: replacementId }) : post);
     categoryDeleteTarget = null;
-    await loadBoard();
+    recomputeCategoryCounts();
+    reconcileSelectedCategory();
+    renderAll();
     setCategoryMessage('카테고리를 삭제했습니다.');
   } catch (error) {
     setCategoryMessage(error.message || '카테고리를 삭제하지 못했습니다.');
@@ -1044,7 +1087,7 @@ function shortcutInputValues(form) {
 
 function validateShortcutInput({ title, url }) {
   if (!title || title.length > 100) return '바로가기 제목은 1~100자로 입력해주세요.';
-  if (!url || url.length > 2048) return 'http 또는 https 주소를 입력해주세요.';
+  if (!url || url.length > MAX_SHORTCUT_URL) return 'http 또는 https 주소를 입력해주세요.';
   return '';
 }
 
@@ -1058,9 +1101,11 @@ async function addShortcut(event) {
   }
   setShortcutMessage('바로가기 링크를 추가하는 중...');
   try {
-    await api('/api/shortcuts', { method: 'POST', body: JSON.stringify(values) });
+    const data = await api('/api/shortcuts', { method: 'POST', body: JSON.stringify(values) });
+    shortcuts = normalizeShortcuts([...shortcuts, data.shortcut]);
     event.target.reset();
-    await loadBoard();
+    renderShortcutList();
+    renderShortcutManager();
     setShortcutMessage('바로가기 링크를 추가했습니다.');
   } catch (error) {
     setShortcutMessage(error.message || '바로가기 링크를 추가하지 못했습니다.');
@@ -1102,9 +1147,11 @@ async function saveShortcutEdit(event) {
   }
   setShortcutMessage('바로가기 링크를 저장하는 중...');
   try {
-    await api(`/api/shortcuts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(values) });
+    const data = await api(`/api/shortcuts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(values) });
+    shortcuts = normalizeShortcuts(shortcuts.map((shortcut) => shortcut.id === id ? data.shortcut : shortcut));
     editingShortcutId = null;
-    await loadBoard();
+    renderShortcutList();
+    renderShortcutManager();
     setShortcutMessage('바로가기 링크를 수정했습니다.');
   } catch (error) {
     setShortcutMessage(error.message || '바로가기 링크를 수정하지 못했습니다.');
@@ -1119,11 +1166,13 @@ async function moveShortcut(id, direction) {
   [reordered[index], reordered[destination]] = [reordered[destination], reordered[index]];
   setShortcutMessage('바로가기 링크 순서를 저장하는 중...');
   try {
-    await api('/api/shortcuts/order', {
+    const data = await api('/api/shortcuts/order', {
       method: 'PATCH',
       body: JSON.stringify({ shortcut_ids: reordered.map((shortcut) => shortcut.id) })
     });
-    await loadBoard();
+    shortcuts = normalizeShortcuts(data.shortcuts);
+    renderShortcutList();
+    renderShortcutManager();
     setShortcutMessage('바로가기 링크 순서를 변경했습니다.');
   } catch (error) {
     setShortcutMessage(error.message || '바로가기 링크 순서를 변경하지 못했습니다.');
@@ -1152,8 +1201,10 @@ async function deleteShortcut() {
   setShortcutMessage('바로가기 링크를 삭제하는 중...');
   try {
     await api(`/api/shortcuts/${encodeURIComponent(shortcut.id)}`, { method: 'DELETE' });
+    shortcuts = normalizeShortcuts(shortcuts.filter((item) => item.id !== shortcut.id).map((item, index) => ({ ...item, sort_order: index })));
     shortcutDeleteTarget = null;
-    await loadBoard();
+    renderShortcutList();
+    renderShortcutManager();
     setShortcutMessage('바로가기 링크를 삭제했습니다.');
   } catch (error) {
     setShortcutMessage(error.message || '바로가기 링크를 삭제하지 못했습니다.');
@@ -1183,7 +1234,10 @@ function openEditor(post = null) {
   $('#postAuthor').readOnly = true;
   $('#postTitle').value = post?.title || '';
   $('#postTags').value = normalizeTags(post?.tags).map((tag) => `#${tag}`).join(' ');
-  editorImages = normalizeImagePaths(post?.image_urls).map((path) => ({ kind: 'retained', path }));
+  editorImages = normalizeImagePaths(post?.image_urls).map((path) => ({ kind: 'retained', media: 'images', path }));
+  editorAttachments = (post?.attachments || []).map((attachment) => ({ kind: 'retained', media: 'files', attachment }));
+  $('#postAttachments').value = '';
+  renderAttachmentEditor();
   $('#postImages').value = '';
   renderImageEditor();
   $('#postContent').value = post?.content || '';
@@ -1203,14 +1257,14 @@ function markEditorDirty() {
 }
 
 function confirmEditorDiscard() {
-  return !editorIsDirty || window.confirm('작성 중인 내용과 이미지 변경 사항이 사라집니다. 닫을까요?');
+  return !editorSaving && (!editorIsDirty || window.confirm('작성 중인 내용과 첨부 변경 사항이 사라집니다. 닫을까요?'));
 }
 
 function closeDialog(dialogId) {
   const dialog = document.getElementById(dialogId);
   if (!dialog?.open) return;
   if (dialogId === 'editorDialog' && !confirmEditorDiscard()) return;
-  if (dialogId === 'editorDialog') editorIsDirty = false;
+  if (dialogId === 'editorDialog') { discardEditorUploads(); editorIsDirty = false; }
   dialog.close();
 }
 
@@ -1246,9 +1300,10 @@ function updateShareButton() {
 }
 
 function updateSelectedPost(post) {
-  const updated = { ...post, image_urls: normalizeImagePaths(post.image_urls) };
+  const updated = normalizePost(post);
   const index = posts.findIndex((item) => String(item.id) === String(updated.id));
   if (index >= 0) posts[index] = updated;
+  else posts.unshift(updated);
   selectedPost = updated;
 }
 
@@ -1301,12 +1356,6 @@ async function openViewer(id) {
   if (!post) return;
   if (isConfidential(post) && !window.confirm('기밀 자료입니다. Discord 화면 공유가 꺼져 있는지 확인한 뒤 열어주세요.')) return;
   selectedPost = post;
-  try {
-    await api(`/api/posts/${encodeURIComponent(selectedPost.id)}/view`, { method: 'POST' });
-    selectedPost.view_count = Number(selectedPost.view_count || 0) + 1;
-  } catch (error) {
-    console.warn(error);
-  }
   $('#viewerCategory').innerHTML = isConfidential(selectedPost) ? '🔒 기밀 자료' : renderPostCategory(selectedPost);
   $('#viewerTitle').textContent = selectedPost.title;
   $('#viewerMeta').textContent = `${selectedPost.author_name} · ${formatFullDate(selectedPost.created_at)} · 조회 ${Number(selectedPost.view_count || 0).toLocaleString('ko-KR')}`;
@@ -1315,6 +1364,7 @@ async function openViewer(id) {
   const imagePaths = normalizeImagePaths(selectedPost.image_urls);
   $('#viewerImages').innerHTML = imagePaths.map((path) => `<img src="${escapeHtml(imageUrl(path))}" alt="${escapeHtml(selectedPost.title)} 첨부 이미지" loading="lazy">`).join('');
   $('#viewerImages').hidden = imagePaths.length === 0;
+  renderViewerAttachments(selectedPost);
   appendLinkedText($('#viewerContent'), selectedPost.content);
   $('#editPostButton').hidden = !canEdit(selectedPost);
   $('#deletePostButton').hidden = !canDelete(selectedPost);
@@ -1322,10 +1372,19 @@ async function openViewer(id) {
   updateShareButton();
   $('#viewerDialog').showModal();
   renderBoardState();
+  // Show content immediately; the view counter never blocks opening a memo.
+  void api(`/api/posts/${encodeURIComponent(post.id)}/view`, { method: 'POST' }).then((data) => {
+    post.view_count = Number(data.viewCount);
+    if (selectedPost?.id === post.id && $('#viewerDialog').open) {
+      $('#viewerMeta').textContent = `${post.author_name} · ${formatFullDate(post.created_at)} · 조회 ${numberFormatter.format(post.view_count)}`;
+      renderPosts();
+    }
+  }).catch(() => undefined);
 }
 
 async function savePost(event) {
   event.preventDefault();
+  if (editorSaving) return;
   const id = $('#postId').value;
   const original = posts.find((post) => String(post.id) === String(id));
   const payload = {
@@ -1342,31 +1401,47 @@ async function savePost(event) {
     return;
   }
   try {
+    const fileError = attachmentLimitError(editorAttachments.map((entry) => entry.kind === 'retained' ? entry.attachment : entry.file));
+    if (fileError) throw new Error(fileError);
     if (payload.is_notice && !original?.is_notice && posts.filter((post) => post.is_notice).length >= 2) {
       throw new Error('공지는 최대 2개까지만 가능합니다.');
     }
-    payload.image_urls = await uploadEditorImages();
+    editorSaving = true;
+    $('#postForm').inert = true;
+    $('#postForm').setAttribute('aria-busy', 'true');
+    $('#editorMessage').textContent = '첨부파일과 글을 저장하는 중...';
+    Object.assign(payload, await uploadEditorMedia());
+    let result;
     if (id) {
       if (!canEdit(original)) throw new Error('수정 권한이 없습니다.');
-      await api(`/api/posts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      result = await api(`/api/posts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) });
     } else {
-      await api('/api/posts', { method: 'POST', body: JSON.stringify(payload) });
+      result = await api('/api/posts', { method: 'POST', body: JSON.stringify(payload) });
     }
     editorIsDirty = false;
     $('#editorDialog').close();
-    await loadBoard();
+    updateSelectedPost(result.post);
+    recomputeCategoryCounts();
+    renderAll();
   } catch (error) {
     $('#editorMessage').textContent = error.message || '저장하지 못했습니다.';
+  } finally {
+    editorSaving = false;
+    $('#postForm').inert = false;
+    $('#postForm').setAttribute('aria-busy', 'false');
   }
 }
 
 async function deleteSelectedPost() {
   if (!selectedPost || !canDelete(selectedPost) || !confirm('이 글을 삭제할까요?')) return;
   try {
-    await api(`/api/posts/${encodeURIComponent(selectedPost.id)}`, { method: 'DELETE' });
+    const deletedId = selectedPost.id;
+    await api(`/api/posts/${encodeURIComponent(deletedId)}`, { method: 'DELETE' });
+    posts = posts.filter((post) => post.id !== deletedId);
     $('#viewerDialog').close();
     selectedPost = null;
-    await loadBoard();
+    recomputeCategoryCounts();
+    renderAll();
   } catch (error) {
     alert(error.message || '삭제하지 못했습니다.');
   }
@@ -1467,17 +1542,39 @@ function bindEvents() {
   $('#postImages').addEventListener('change', (event) => {
     const available = Math.max(0, maxImagesPerPost - editorImages.length);
     const selected = [...event.target.files];
-    const valid = selected.filter((file) => ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type) && file.size <= 25 * 1024 * 1024).slice(0, available);
-    editorImages.push(...valid.map((file) => ({ kind: 'pending', file })));
+    const valid = selected.filter((file) => IMAGE_TYPES.includes(file.type) && file.size > 0 && file.size <= MAX_UPLOAD_BYTES).slice(0, available);
+    editorImages.push(...valid.map((file) => ({ kind: 'pending', media: 'images', file })));
     if (valid.length !== selected.length) $('#editorMessage').textContent = '이미지는 최대 10장, 한 장당 25MB 이하로 올려주세요.';
     event.target.value = '';
     if (valid.length) markEditorDirty();
     renderImageEditor();
   });
+  $('#postAttachments').addEventListener('change', (event) => {
+    const selected = [...event.target.files];
+    const existing = editorAttachments.map((entry) => entry.kind === 'retained' ? entry.attachment : entry.file);
+    const error = attachmentLimitError([...existing, ...selected]);
+    if (error) $('#editorMessage').textContent = error;
+    else {
+      editorAttachments.push(...selected.map((file) => ({ kind: 'pending', media: 'files', file })));
+      $('#editorMessage').textContent = '';
+      if (selected.length) markEditorDirty();
+      renderAttachmentEditor();
+    }
+    event.target.value = '';
+  });
+  $('#attachmentEditorList').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-remove-attachment]');
+    if (!button) return;
+    const removed = editorAttachments.splice(Number(button.dataset.removeAttachment), 1);
+    discardEntries(removed, api);
+    markEditorDirty();
+    renderAttachmentEditor();
+  });
   $('#imageEditorList').addEventListener('click', (event) => {
     const removeButton = event.target.closest('[data-remove-image]');
     if (!removeButton) return;
-    editorImages.splice(Number(removeButton.dataset.removeImage), 1);
+    const removed = editorImages.splice(Number(removeButton.dataset.removeImage), 1);
+    discardEntries(removed, api);
     markEditorDirty();
     renderImageEditor();
   });
@@ -1591,12 +1688,15 @@ function bindEvents() {
   $$('.modal').forEach((dialog) => dialog.addEventListener('click', (event) => { if (event.target === dialog) closeDialog(dialog.id); }));
   $('#editorDialog').addEventListener('cancel', (event) => {
     if (!confirmEditorDiscard()) event.preventDefault();
-    else editorIsDirty = false;
+    else { discardEditorUploads(); editorIsDirty = false; }
   });
   window.addEventListener('beforeunload', (event) => {
     if (!$('#editorDialog').open || !editorIsDirty) return;
     event.preventDefault();
     event.returnValue = '';
+  });
+  window.addEventListener('pagehide', () => {
+    if ($('#editorDialog').open && !editorSaving) discardEditorUploads();
   });
 }
 

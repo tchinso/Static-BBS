@@ -1,25 +1,19 @@
-import { crossSiteRequest, isSameOriginRequest, json, serverError, unauthorized } from '../../../_lib/http.js';
-import { getPost, incrementPostView, isUuid } from '../../../_lib/board.js';
-import { getAuthorizedSession } from '../../../_lib/session.js';
+import { json, serverError } from '../../../_lib/http.js';
+import { incrementPostView, isUuid } from '../../../_lib/board.js';
+import { authorize } from '../../../_lib/authorize.js';
 
 export async function onRequestPost(context) {
-  if (!isSameOriginRequest(context.request)) return crossSiteRequest();
-  let auth;
-  try {
-    auth = await getAuthorizedSession(context.request, context.env);
-  } catch {
-    return serverError();
-  }
-  if (!auth.ok) return unauthorized({ 'Set-Cookie': auth.clearCookie });
+  const { auth, response } = await authorize(context, { mutation: true });
+  if (response) return response;
   const id = context.params?.id;
   if (typeof id !== 'string' || !isUuid(id)) return json({ error: '글을 찾을 수 없습니다.' }, 404);
   try {
-    // Check existence first so a missing id does not look like a successful view.
-    if (!await getPost(context.env, id)) return json({ error: '글을 찾을 수 없습니다.' }, 404);
-    if (!await incrementPostView(context.env, id, auth.session.accessToken)) {
+    const viewed = await incrementPostView(context.env, id);
+    if (!viewed.ok) {
       return json({ error: '조회수를 반영하지 못했습니다. 잠시 후 다시 시도해주세요.' }, 502);
     }
-    return json({ viewed: true }, 200, auth.setCookie ? { 'Set-Cookie': auth.setCookie } : undefined);
+    if (viewed.count === null) return json({ error: '글을 찾을 수 없습니다.' }, 404);
+    return json({ viewed: true, viewCount: viewed.count }, 200, auth.setCookie ? { 'Set-Cookie': auth.setCookie } : undefined);
   } catch {
     return serverError();
   }

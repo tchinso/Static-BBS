@@ -1,6 +1,6 @@
-import { crossSiteRequest, isSameOriginRequest, json, serverError, unauthorized } from '../../../_lib/http.js';
+import { json, serverError } from '../../../_lib/http.js';
 import { createPostShareLink, isUuid, presentPost } from '../../../_lib/board.js';
-import { getAuthorizedSession } from '../../../_lib/session.js';
+import { authorize } from '../../../_lib/authorize.js';
 
 function notFound() {
   return json({ error: '글을 찾을 수 없습니다.' }, 404);
@@ -15,15 +15,8 @@ function shareUrl(request, shareTag) {
 }
 
 export async function onRequestPost(context) {
-  if (!isSameOriginRequest(context.request)) return crossSiteRequest();
-
-  let auth;
-  try {
-    auth = await getAuthorizedSession(context.request, context.env);
-  } catch {
-    return serverError();
-  }
-  if (!auth.ok) return unauthorized({ 'Set-Cookie': auth.clearCookie });
+  const { auth, response } = await authorize(context, { mutation: true });
+  if (response) return response;
 
   const id = context.params?.id;
   if (typeof id !== 'string' || !isUuid(id)) return notFound();

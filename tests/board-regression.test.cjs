@@ -14,8 +14,8 @@ function board() {
       return elements.get(selector);
     }
   };
-  const context = vm.createContext({ window: {}, document, localStorage: { getItem: () => null }, URL });
-  const source = readFileSync(require.resolve('../app.js'), 'utf8').replace('void start();', '');
+  const context = vm.createContext({ window: {}, document, localStorage: { getItem: () => null }, URL, MAX_IMAGES:10, objectKey:(value)=>value });
+  const source = readFileSync(require.resolve('../app.js'), 'utf8').replace(/^import .*;$/gm, '').replace('void start();', '');
   vm.runInContext(source, context);
   return { run: (code) => vm.runInContext(code, context), elements };
 }

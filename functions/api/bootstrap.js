@@ -1,16 +1,12 @@
-import { json, serverError, unauthorized } from '../_lib/http.js';
+import { scheduleStorageCleanup } from '../_lib/storage-cleanup.js';
+import { json, serverError } from '../_lib/http.js';
 import { createBoardBootstrap } from '../_lib/bootstrap.js';
-import { getAuthorizedSession } from '../_lib/session.js';
+import { authorize } from '../_lib/authorize.js';
 
 export async function onRequestGet(context) {
   const startedAt = performance.now();
-  let auth;
-  try {
-    auth = await getAuthorizedSession(context.request, context.env);
-  } catch {
-    return serverError();
-  }
-  if (!auth.ok) return unauthorized({ 'Set-Cookie': auth.clearCookie });
+  const { auth, response } = await authorize(context);
+  if (response) return response;
 
   try {
     const authenticatedAt = performance.now();
@@ -22,6 +18,7 @@ export async function onRequestGet(context) {
       `board;dur=${(completedAt - authenticatedAt).toFixed(1)}`,
       `total;dur=${(completedAt - startedAt).toFixed(1)}`
     ].join(', '));
+    scheduleStorageCleanup(context);
     return json(bootstrap, 200, headers);
   } catch {
     return serverError();

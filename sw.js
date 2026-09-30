@@ -1,9 +1,12 @@
-const CACHE_NAME = 'nyangcatmemo-shell-v7';
+const CACHE_NAME = 'nyangcatmemo-shell-v8';
 const APP_SHELL = [
   './',
   './index.html',
   './styles.css',
   './app.js',
+  './shared/limits.js',
+  './shared/validation.js',
+  './client/uploads.js',
   './config.js',
   './manifest.webmanifest',
   './icons/app-icon.svg'

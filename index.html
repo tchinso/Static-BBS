@@ -122,6 +122,9 @@
       <label>이미지<input id="postImages" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple></label>
       <p class="upload-help">JPG, PNG, WEBP, GIF · 한 장당 25MB 이하 · 최대 10장 · 이미지를 드래그해 순서를 바꿀 수 있어요.</p>
       <div class="image-editor-list" id="imageEditorList"></div>
+      <label>첨부파일<input id="postAttachments" type="file" multiple aria-describedby="attachmentUsage"></label>
+      <p class="upload-help" id="attachmentUsage">0/8개 · 0 B / 25MB (이미지 제외)</p>
+      <div id="attachmentEditorList" class="attachment-list" aria-live="polite"></div>
       <div class="editor-options">
         <label class="check-label"><input id="postPinned" type="checkbox"> 별표</label>
         <label class="check-label"><input id="postNotice" type="checkbox"> 공지글로 등록 (최대 2개)</label>
@@ -145,6 +148,7 @@
       <div class="viewer-tags" id="viewerTags"></div>
       <div class="viewer-content" id="viewerContent"></div>
       <div class="viewer-images" id="viewerImages"></div>
+      <div class="attachment-list viewer-attachments" id="viewerAttachments" hidden></div>
       <div class="viewer-share-message" id="shareLinkMessage" role="status" aria-live="polite"></div>
       <div class="modal-actions viewer-actions">
         <button class="button button-ghost" id="copyPostContentButton" type="button">내용 복사</button>
@@ -232,7 +236,7 @@
           <label class="sr-only" for="shortcutTitleInput">새 바로가기 제목</label>
           <input id="shortcutTitleInput" name="title" maxlength="100" placeholder="바로가기 제목" required>
           <label class="sr-only" for="shortcutUrlInput">새 바로가기 주소</label>
-          <input id="shortcutUrlInput" name="url" type="url" maxlength="2048" placeholder="https://example.com" required>
+          <input id="shortcutUrlInput" name="url" type="url" maxlength="4096" placeholder="https://example.com" required>
           <button class="button button-primary" type="submit">추가</button>
         </form>
         <div class="shortcut-settings-list" id="shortcutSettingsList" aria-live="polite"></div>
@@ -250,7 +254,7 @@
   </dialog>
 
   <script src="/config.js"></script>
-  <script src="/app.js"></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>
 

@@ -1,16 +1,10 @@
 import { supabaseJson } from './supabase.js';
+import { restQuery, firstRow, rpc } from './database.js';
+import { MAX_SHORTCUT_URL } from '../../shared/limits.js';
+import { isUuid } from '../../shared/validation.js';
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_TITLE_LENGTH = 100;
-const MAX_URL_LENGTH = 4096;
-
-function restQuery(table, query) {
-  return `/rest/v1/${table}?${new URLSearchParams(query).toString()}`;
-}
-
-function firstRow(data) {
-  return Array.isArray(data) ? data[0] || null : null;
-}
+const MAX_URL_LENGTH = MAX_SHORTCUT_URL;
 
 function shortcutTitle(value) {
   if (typeof value !== 'string') return '';
@@ -30,16 +24,8 @@ function shortcutUrl(value) {
   }
 }
 
-function rpc(env, name, body) {
-  return supabaseJson(env, `/rest/v1/rpc/${name}`, {
-    method: 'POST',
-    headers: { Prefer: 'return=representation' },
-    body
-  });
-}
-
 export function isShortcutId(value) {
-  return typeof value === 'string' && UUID.test(value);
+  return isUuid(value);
 }
 
 export async function listShortcuts(env) {

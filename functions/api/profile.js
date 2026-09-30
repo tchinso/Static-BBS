@@ -1,19 +1,10 @@
-import { badRequest, crossSiteRequest, isSameOriginRequest, json, readJson, serverError, unauthorized } from '../_lib/http.js';
+import { badRequest, json, readJson, serverError } from '../_lib/http.js';
 import { cleanText, ensureAdminProfile, updateDisplayName } from '../_lib/board.js';
-import { getAuthorizedSession } from '../_lib/session.js';
-
-async function authenticated(context) {
-  try {
-    return await getAuthorizedSession(context.request, context.env);
-  } catch {
-    return null;
-  }
-}
+import { authorize } from '../_lib/authorize.js';
 
 export async function onRequestGet(context) {
-  const auth = await authenticated(context);
-  if (!auth) return serverError();
-  if (!auth.ok) return unauthorized({ 'Set-Cookie': auth.clearCookie });
+  const { auth, response } = await authorize(context);
+  if (response) return response;
   try {
     const profile = await ensureAdminProfile(context.env, auth.user);
     return json({ profile }, 200, auth.setCookie ? { 'Set-Cookie': auth.setCookie } : undefined);
@@ -23,10 +14,8 @@ export async function onRequestGet(context) {
 }
 
 export async function onRequestPatch(context) {
-  if (!isSameOriginRequest(context.request)) return crossSiteRequest();
-  const auth = await authenticated(context);
-  if (!auth) return serverError();
-  if (!auth.ok) return unauthorized({ 'Set-Cookie': auth.clearCookie });
+  const { auth, response } = await authorize(context, { mutation: true });
+  if (response) return response;
   const body = await readJson(context.request);
   const displayName = cleanText(body?.display_name, { min: 1, max: 20 });
   if (!displayName) return badRequest('표시 이름은 1~20자로 입력해주세요.');

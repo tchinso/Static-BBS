@@ -1,14 +1,7 @@
 import { supabaseJson } from './supabase.js';
+import { restQuery, firstRow, rpc } from './database.js';
+import { isUuid } from '../../shared/validation.js';
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function restQuery(table, query) {
-  return `/rest/v1/${table}?${new URLSearchParams(query).toString()}`;
-}
-
-function firstRow(data) {
-  return Array.isArray(data) ? data[0] || null : null;
-}
 
 function categoryName(value) {
   if (typeof value !== 'string') return '';
@@ -16,16 +9,8 @@ function categoryName(value) {
   return name.length >= 1 && name.length <= 60 ? name : '';
 }
 
-function rpc(env, name, body) {
-  return supabaseJson(env, `/rest/v1/rpc/${name}`, {
-    method: 'POST',
-    headers: { Prefer: 'return=representation' },
-    body
-  });
-}
-
 export function isCategoryId(value) {
-  return typeof value === 'string' && UUID.test(value);
+  return isUuid(value);
 }
 
 export function withCategoryPostCounts(categories, posts) {

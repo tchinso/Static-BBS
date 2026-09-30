@@ -1,24 +1,16 @@
+import { MAX_IMAGES } from '../../shared/limits.js';
+import { restQuery, firstRow, rpc } from './database.js';
+import { objectKey, isUuid } from '../../shared/validation.js';
+import { cleanAttachments } from './media.js';
+export { isUuid } from '../../shared/validation.js';
 import { supabaseJson } from './supabase.js';
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHARE_TAG_UPPERCASE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const SHARE_TAG_LOWERCASE = 'abcdefghijklmnopqrstuvwxyz';
 const SHARE_TAG_DIGITS = '0123456789';
 const SHARE_TAG_CHARACTERS = `${SHARE_TAG_UPPERCASE}${SHARE_TAG_LOWERCASE}${SHARE_TAG_DIGITS}`;
 const SHARE_TAG_LENGTH = 6;
-const POST_SELECT = '*,community_categories(id,name)';
-
-function restQuery(table, query) {
-  return `/rest/v1/${table}?${new URLSearchParams(query).toString()}`;
-}
-
-function firstRow(data) {
-  return Array.isArray(data) ? data[0] || null : null;
-}
-
-export function isUuid(value) {
-  return typeof value === 'string' && UUID.test(value);
-}
+const POST_SELECT = 'id,category_id,title,tags,content,image_urls,attachments,author_id,author_name,is_notice,is_confidential,is_pinned,view_count,created_at,updated_at,community_categories(id,name)';
 
 export function cleanText(value, { min = 0, max, trim = true } = {}) {
   if (typeof value !== 'string') return null;
@@ -113,16 +105,11 @@ function unproxyImagePath(value, env) {
 
 export function validImagePath(value, env) {
   const path = unproxyImagePath(value, env);
-  if (!path || path.length > 512 || path.includes('\\') || path.includes('\0')) return '';
-  const parts = path.split('/');
-  if (parts.length < 2 || parts.some((part) => !part || part === '.' || part === '..')) return '';
-  // Uploaded objects are intentionally contained in a UUID-named user folder.
-  if (!UUID.test(parts[0])) return '';
-  return path;
+  return objectKey(path);
 }
 
 export function cleanImagePaths(value, env) {
-  if (!Array.isArray(value) || value.length > 10) return null;
+  if (!Array.isArray(value) || value.length > MAX_IMAGES) return null;
   const paths = [];
   for (const item of value) {
     const path = validImagePath(item, env);
@@ -130,10 +117,6 @@ export function cleanImagePaths(value, env) {
     if (!paths.includes(path)) paths.push(path);
   }
   return paths;
-}
-
-export function imageProxyUrl(path) {
-  return `/api/images/${path.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 export function presentPost(post, env) {
@@ -156,7 +139,7 @@ export function presentPost(post, env) {
     category: categoryName,
     community_categories: undefined,
     image_urls: imagePaths,
-    image_proxy_urls: imagePaths.map(imageProxyUrl)
+    attachments: cleanAttachments(post?.attachments ?? []) || []
   };
 }
 
@@ -193,31 +176,25 @@ export async function ensureAdminProfile(env, user) {
 }
 
 export async function updateDisplayName(env, userId, displayName) {
-  const result = await supabaseJson(env, restQuery('community_profiles', { id: `eq.${userId}` }), {
-    method: 'PATCH',
-    headers: { Prefer: 'return=representation' },
-    body: { display_name: displayName, role: 'admin' }
-  });
-  if (!result.response.ok) return null;
+  const result = await rpc(env, 'community_update_display_name', { user_id_value: userId, name_value: displayName });
   const profile = firstRow(result.data);
-  // Author names are denormalized into posts for fast board reads. Keep prior
-  // posts in sync when a user changes their public display name.
-  const postResult = await supabaseJson(env, restQuery('community_posts', { author_id: `eq.${userId}` }), {
-    method: 'PATCH',
-    headers: { Prefer: 'return=minimal' },
-    body: { author_name: displayName, updated_at: new Date().toISOString() }
-  });
-  if (!postResult.response.ok) return null;
-  return profile ? { id: profile.id, display_name: profile.display_name, role: 'admin' } : null;
+  return result.response.ok && profile ? { id: profile.id, display_name: profile.display_name, role: 'admin' } : null;
 }
 
 export async function listPosts(env) {
-  const result = await supabaseJson(env, restQuery('community_posts', {
-    select: POST_SELECT,
-    order: 'created_at.desc,id.desc'
-  }));
-  if (!result.response.ok || !Array.isArray(result.data)) throw new Error('Post lookup failed.');
-  return result.data.map((post) => presentPost(post, env));
+  // PostgREST applies a row ceiling. Page explicitly rather than silently
+  // hiding everything beyond the first server page.
+  const posts = [];
+  const limit = 500;
+  for (let offset = 0; ; offset += limit) {
+    const result = await supabaseJson(env, restQuery('community_posts', {
+      select: POST_SELECT, order: 'created_at.desc,id.desc', limit: String(limit), offset: String(offset)
+    }));
+    if (!result.response.ok || !Array.isArray(result.data)) throw new Error('Post lookup failed.');
+    posts.push(...result.data);
+    if (result.data.length < limit) break;
+  }
+  return [...new Map(posts.map((post) => [post.id, presentPost(post, env)])).values()];
 }
 
 export async function getPost(env, id) {
@@ -225,17 +202,6 @@ export async function getPost(env, id) {
   if (!result.response.ok) throw new Error('Post lookup failed.');
   const post = firstRow(result.data);
   return post ? presentPost(post, env) : null;
-}
-
-export async function memberCount(env) {
-  const result = await supabaseJson(env, restQuery('community_profiles', { select: 'id' }), {
-    method: 'HEAD',
-    headers: { Prefer: 'count=exact' }
-  });
-  if (!result.response.ok) return null;
-  const contentRange = result.response.headers.get('content-range') || '';
-  const match = contentRange.match(/\/(\d+)$/);
-  return match ? Number(match[1]) : null;
 }
 
 function writeBoolean(body, name, target) {
@@ -273,6 +239,11 @@ export function makePostFields(body, env, { creating = false, profile = null, us
     const imageUrls = cleanImagePaths(body.image_urls ?? [], env);
     if (!imageUrls) return { error: '첨부 이미지 정보를 확인해주세요.' };
     fields.image_urls = imageUrls;
+  }
+  if (creating || 'attachments' in body) {
+    const attachments = cleanAttachments(body.attachments ?? []);
+    if (!attachments) return { error: '첨부파일은 최대 8개, 총 25MB 이하로 올려주세요.' };
+    fields.attachments = attachments;
   }
   if (!writeBoolean(body, 'is_notice', fields) || !writeBoolean(body, 'is_pinned', fields) || !writeBoolean(body, 'is_confidential', fields)) {
     return { error: '별표, 공지 또는 기밀 자료 설정을 확인해주세요.' };
@@ -369,67 +340,6 @@ export async function createPostShareLink(env, id) {
   return { ok: false, reason: 'retry_exhausted' };
 }
 
-function uniqueImagePaths(values, env) {
-  return [...new Set(
-    (Array.isArray(values) ? values : []).map((value) => validImagePath(value, env)).filter(Boolean)
-  )];
-}
-
-export async function deleteImageObjects(env, values) {
-  const paths = uniqueImagePaths(values, env);
-  if (!paths.length) return { ok: true, deleted: 0 };
-
-  // Use the Storage API rather than deleting storage.objects rows directly;
-  // this removes the actual object as well as its database metadata.
-  const result = await supabaseJson(env, '/storage/v1/object/community-images', {
-    method: 'DELETE',
-    body: { prefixes: paths }
-  });
-  return { ok: result.response.ok, deleted: result.response.ok ? paths.length : 0, detail: result.data };
-}
-
-export async function queueImageCleanup(env, values, { notBefore = new Date() } = {}) {
-  const paths = uniqueImagePaths(values, env);
-  if (!paths.length) return { ok: true, queued: 0 };
-  const timestamp = notBefore instanceof Date && Number.isFinite(notBefore.getTime())
-    ? notBefore.toISOString()
-    : new Date().toISOString();
-  const result = await supabaseJson(env, '/rest/v1/community_image_cleanup_queue', {
-    method: 'POST',
-    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-    body: paths.map((object_path) => ({ object_path, not_before: timestamp }))
-  });
-  return { ok: result.response.ok, queued: result.response.ok ? paths.length : 0 };
-}
-
-export async function drainImageCleanupQueue(env, { limit = 20 } = {}) {
-  const queued = await supabaseJson(env, restQuery('community_image_cleanup_queue', {
-    select: 'object_path',
-    not_before: `lte.${new Date().toISOString()}`,
-    order: 'not_before.asc',
-    limit: String(Math.min(Math.max(Number(limit) || 20, 1), 100))
-  }));
-  if (!queued.response.ok || !Array.isArray(queued.data)) return { ok: false, deleted: 0, pending: 0 };
-
-  const paths = uniqueImagePaths(queued.data.map((entry) => entry?.object_path), env);
-  if (!paths.length) return { ok: true, deleted: 0, pending: 0 };
-
-  const removed = await deleteImageObjects(env, paths);
-  if (!removed.ok) return { ok: false, deleted: 0, pending: paths.length };
-
-  const acknowledgements = await Promise.all(paths.map(async (objectPath) => {
-    const result = await supabaseJson(env, restQuery('community_image_cleanup_queue', {
-      object_path: `eq.${objectPath}`
-    }), {
-      method: 'DELETE',
-      headers: { Prefer: 'return=minimal' }
-    });
-    return result.response.ok;
-  }));
-  const cleared = acknowledgements.filter(Boolean).length;
-  return { ok: cleared === paths.length, deleted: cleared, pending: paths.length - cleared };
-}
-
 export async function deletePost(env, id) {
   const result = await supabaseJson(env, restQuery('community_posts', { id: `eq.${id}` }), {
     method: 'DELETE',
@@ -438,13 +348,14 @@ export async function deletePost(env, id) {
   return { ok: result.response.ok, deleted: Array.isArray(result.data) && result.data.length > 0 };
 }
 
-export async function incrementPostView(env, id, accessToken) {
-  const result = await supabaseJson(env, '/rest/v1/rpc/community_increment_post_views', {
-    method: 'POST',
-    accessToken,
-    body: { post_id_value: id }
-  });
-  return result.response.ok;
+export async function incrementPostView(env, id) {
+  const result = await rpc(env, 'community_record_post_view', { post_id_value: id });
+  return { ok: result.response.ok, count: result.data };
+}
+
+export function mediaValidationError(detail) {
+  const source = Array.isArray(detail) ? detail[0] : detail;
+  return source?.code === '23514' && /attachment|media|upload|images/i.test(source.message || '');
 }
 
 export function noticeLimitError(detail) {

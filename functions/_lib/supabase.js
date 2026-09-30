@@ -1,3 +1,6 @@
+import { singleFlight } from './single-flight.js';
+const userLookup = singleFlight();
+const tokenRefresh = singleFlight();
 function requiredString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
@@ -105,7 +108,7 @@ export async function supabaseRaw(env, path, options = {}) {
   });
 }
 
-export async function getAuthUser(env, accessToken) {
+async function lookupAuthUser(env, accessToken) {
   if (typeof accessToken !== 'string' || accessToken.length < 16) return null;
   try {
     const { response, data } = await supabaseJson(env, '/auth/v1/user', { accessToken });
@@ -142,7 +145,7 @@ export async function requestMagicLink(env, email) {
   });
 }
 
-export async function refreshAuthSession(env, refreshToken) {
+async function refreshSession(env, refreshToken) {
   if (!isSupabaseRefreshToken(refreshToken)) return null;
   try {
     const { response, data } = await supabaseJson(env, '/auth/v1/token?grant_type=refresh_token', {
@@ -170,3 +173,6 @@ export async function revokeAuthSession(env, accessToken) {
     // Clearing the local cookie is still the important part of logout.
   }
 }
+
+export const getAuthUser = (env, token) => userLookup(`${env.SUPABASE_URL}:${token}`, () => lookupAuthUser(env, token));
+export const refreshAuthSession = (env, token) => tokenRefresh(`${env.SUPABASE_URL}:${token}`, () => refreshSession(env, token));
