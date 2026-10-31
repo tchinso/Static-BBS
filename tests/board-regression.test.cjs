@@ -14,7 +14,7 @@ function board() {
       return elements.get(selector);
     }
   };
-  const context = vm.createContext({ window: {}, document, localStorage: { getItem: () => null }, URL, MAX_IMAGES:10, objectKey:(value)=>value });
+  const context = vm.createContext({ window: {}, document, localStorage: { getItem: () => null }, URL, daysUntil: (date) => Math.round((Date.parse(date) - Date.parse('2026-11-01')) / 86400000), MAX_IMAGES:10, objectKey:(value)=>value });
   const source = readFileSync(require.resolve('../app.js'), 'utf8').replace(/^import .*;$/gm, '').replace('void start();', '');
   vm.runInContext(source, context);
   return { run: (code) => vm.runInContext(code, context), elements };
@@ -68,4 +68,30 @@ test('star category markup escapes category names', () => {
   assert.match(html, /post-star/);
   assert.match(html, /&lt;script&gt;/);
   assert.doesNotMatch(html, /📌/);
+});
+
+
+test('calendar shows only upcoming deadlines at exact 3/14-day boundaries and escapes content', () => {
+  const { run, elements } = board();
+  run(`calendarEvents = [
+    {id:'past',event_date:'2026-10-31',content:'past'},
+    {id:'today',event_date:'2026-11-01',content:'<img src=x onerror=alert(1)>'},
+    {id:'three',event_date:'2026-11-04',content:'three'},
+    {id:'four',event_date:'2026-11-05',content:'four'},
+    {id:'fourteen',event_date:'2026-11-15',content:'fourteen'},
+    {id:'fifteen',event_date:'2026-11-16',content:'fifteen'}
+  ]; renderCalendar(); renderCategoryNavigation();`);
+  assert.match(elements.get('#urgentEvents').innerHTML, /three/);
+  assert.doesNotMatch(elements.get('#urgentEvents').innerHTML, /past|four|fifteen|<img/);
+  assert.match(elements.get('#urgentEvents').innerHTML, /&lt;img/);
+  assert.match(elements.get('#categoryNav').innerHTML, /calendar-dot/);
+  run(`selectedCategory = '캘린더'; renderCalendar(); reconcileSelectedCategory();`);
+  assert.equal(run('selectedCategory'), '캘린더');
+  assert.equal(elements.get('#postsPanel').hidden, true);
+  assert.equal(elements.get('#calendarPanel').hidden, false);
+  assert.equal(elements.get('#urgentEvents').hidden, true);
+  run(`calendarEvents = calendarEvents.filter(e => e.id === 'fourteen'); renderCategoryNavigation();`);
+  assert.match(elements.get('#categoryNav').innerHTML, /calendar-dot/);
+  run(`calendarEvents = [{id:'future',event_date:'2026-11-16',content:'future'}]; renderCategoryNavigation();`);
+  assert.doesNotMatch(elements.get('#categoryNav').innerHTML, /calendar-dot/);
 });

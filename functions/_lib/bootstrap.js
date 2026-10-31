@@ -1,3 +1,4 @@
+import { listCalendar } from './calendar.js';
 import { ensureAdminProfile, listPosts } from './board.js';
 import { listCategories, withCategoryPostCounts } from './categories.js';
 import { listShortcuts } from './shortcuts.js';
@@ -6,11 +7,12 @@ export async function createBoardBootstrap(env, user) {
   // All reads are independent once the caller has authenticated the user.
   // Running them together removes multiple Supabase round trips from the
   // critical path of every app launch.
-  const [profile, posts, categories, shortcuts] = await Promise.all([
+  const [profile, posts, categories, shortcuts, events] = await Promise.all([
     ensureAdminProfile(env, user),
     listPosts(env),
     listCategories(env),
-    listShortcuts(env)
+    listShortcuts(env),
+    listCalendar(env)
   ]);
 
   return {
@@ -18,6 +20,7 @@ export async function createBoardBootstrap(env, user) {
     profile,
     posts,
     categories: withCategoryPostCounts(categories, posts),
-    shortcuts
+    shortcuts,
+    events
   };
 }

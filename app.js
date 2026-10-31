@@ -1,3 +1,5 @@
+import { cleanExternalLinks, daysUntil, koreaToday } from './shared/features.js';
+import { initExternalSearch } from './client/search.js';
 import { objectKey } from './shared/validation.js';
 import { MAX_IMAGES, MAX_UPLOAD_BYTES, IMAGE_TYPES, MAX_SHORTCUT_URL, attachmentLimitError } from './shared/limits.js';
 import { uploadEntries, discardEntries, formatBytes } from './client/uploads.js';
@@ -19,6 +21,8 @@ let currentProfile = null;
 let categories = [];
 let shortcuts = [];
 let posts = [];
+let calendarEvents = [];
+let editorExternalLinks = [];
 let filteredPosts = [];
 let selectedCategory = '전체글';
 let searchTerm = '';
@@ -57,6 +61,17 @@ function clearBoardState() {
   categories = [];
   shortcuts = [];
   posts = [];
+  calendarEvents = [];
+  editorExternalLinks = [];
+  $('#calendarForm').reset();
+  $('#calendarId').value = '';
+  $('#calendarList').replaceChildren();
+  $('#calendarMessage').textContent = '';
+  $('#externalAttachmentList').replaceChildren();
+  $('#urgentEvents').replaceChildren();
+  $('#urgentEvents').hidden = true;
+  $('#shortcutPanel').hidden = true;
+  $('#shortcutToggle').setAttribute('aria-expanded', 'false');
   filteredPosts = [];
   selectedPost = null;
   editorImages = [];
@@ -204,7 +219,7 @@ function selectedCategoryName() {
 }
 
 function reconcileSelectedCategory() {
-  if (!isAllCategoriesSelected() && selectedCategory !== '별표' && !categoryById(selectedCategory)) selectedCategory = '전체글';
+  if (!isAllCategoriesSelected() && selectedCategory !== '별표' && selectedCategory !== '캘린더' && !categoryById(selectedCategory)) selectedCategory = '전체글';
 }
 
 function rememberLoginEnabled() {
@@ -497,6 +512,7 @@ function applyBoardData(data) {
   categories = normalizeCategories(data.categories);
   shortcuts = normalizeShortcuts(data.shortcuts);
   posts = (data.posts || []).map(normalizePost);
+  calendarEvents = data.events || [];
   reconcileSelectedCategory();
   setBoardVisibility(true);
   renderAll();
@@ -536,8 +552,10 @@ function renderAttachmentEditor() {
 
 function renderViewerAttachments(post) {
   const files = post.attachments || [];
-  $('#viewerAttachments').hidden = files.length === 0;
+  const links = cleanExternalLinks(post.external_links || []) || [];
+  $('#viewerAttachments').hidden = files.length === 0 && links.length === 0;
   $('#viewerAttachments').innerHTML = files.map((file) => `<a class="attachment-row" href="/api/files/${file.path.split('/').map(encodeURIComponent).join('/')}" download="${escapeHtml(file.name)}"><span class="attachment-name">📎 ${escapeHtml(file.name)}</span><span class="attachment-size">${formatBytes(file.size)}</span><span>다운로드 ↓</span></a>`).join('');
+  $('#viewerAttachments').innerHTML += links.map((link) => `<a class="attachment-row" href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer"><span>🔗 ${escapeHtml(link.name)}</span><span>외부 파일 열기 ↗</span></a>`).join('');
 }
 
 async function uploadEditorMedia() {
@@ -606,7 +624,7 @@ function renderPosts() {
           ` : ''}
           <div class="gallery-body">
             ${firstImage ? '' : `<span class="gallery-category">${renderPostCategory(post)}</span>`}
-            <h3>${post.attachments?.length ? '<span class="attachment-indicator" aria-label="첨부파일 있음">📎</span> ' : ''}${escapeHtml(post.title)}</h3>
+            <h3>${(post.attachments?.length || post.external_links?.length) ? '<span class="attachment-indicator" aria-label="첨부파일 있음">📎</span> ' : ''}${escapeHtml(post.title)}</h3>
             ${preview ? `<p>${escapeHtml(preview)}</p>` : ''}
             ${post.tags?.length ? `<div class="post-tags">${renderTags(post.tags)}</div>` : ''}
             <div class="gallery-meta"><span>${escapeHtml(post.author_name)}</span><span>${formatDate(post.created_at)} · 조회 ${numberFormatter.format(Number(post.view_count || 0))}</span></div>
@@ -625,7 +643,7 @@ function renderPosts() {
       return `
         <div class="post-row post-item ${post.is_notice ? 'is-notice' : ''} ${post.is_pinned ? 'is-starred' : ''}" role="row" tabindex="0" data-post-id="${escapeHtml(post.id)}">
           <span class="post-category" role="cell">${renderPostCategory(post)}</span>
-          <span class="post-title" role="cell"><span class="post-title-text">${post.image_urls?.length ? '<span class="image-indicator">▣</span>' : ''}${post.attachments?.length ? '<span class="attachment-indicator" aria-label="첨부파일 있음">📎</span>' : ''}${escapeHtml(post.title)}</span>${post.tags?.length ? `<span class="post-tags">${renderTags(post.tags)}</span>` : ''}</span>
+          <span class="post-title" role="cell"><span class="post-title-text">${post.image_urls?.length ? '<span class="image-indicator">▣</span>' : ''}${(post.attachments?.length || post.external_links?.length) ? '<span class="attachment-indicator" aria-label="첨부파일 있음">📎</span>' : ''}${escapeHtml(post.title)}</span>${post.tags?.length ? `<span class="post-tags">${renderTags(post.tags)}</span>` : ''}</span>
           <span class="post-author" role="cell">${escapeHtml(post.author_name)}</span>
           <span class="post-date" role="cell">${formatDate(post.created_at)}</span>
           <span class="post-views" role="cell">${numberFormatter.format(Number(post.view_count || 0))}</span>
@@ -670,6 +688,7 @@ function renderCategoryNavigation() {
   const navigation = $('#categoryNav');
   if (!navigation) return;
   navigation.innerHTML = `
+    <button class="nav-item ${selectedCategory === '캘린더' ? 'is-active' : ''}" type="button" data-category-id="캘린더">캘린더${calendarEvents.some(event => { const days = daysUntil(event.event_date); return days >= 0 && days <= 14; }) ? '<span class="calendar-dot" role="img" aria-label="14일 이내 일정 있음"></span>' : ''}</button>
     <button class="nav-item ${isAllCategoriesSelected() ? 'is-active' : ''}" type="button" data-view="all">전체글</button>
     ${categories.map((category) => `
       <button class="nav-item ${selectedCategory === category.id ? 'is-active' : ''}" type="button" data-category-id="${escapeHtml(category.id)}">${escapeHtml(category.name)}</button>
@@ -849,6 +868,7 @@ function renderHeader() {
 }
 
 function renderAll() {
+  renderCalendar();
   renderCategoryNavigation();
   renderPostCategoryOptions();
   renderShortcutList();
@@ -862,6 +882,7 @@ function renderAll() {
 }
 
 function renderBoardState() {
+  renderCalendar();
   renderCategoryNavigation();
   renderPosts();
   renderHeader();
@@ -1237,6 +1258,10 @@ function openEditor(post = null) {
   $('#postTitle').value = post?.title || '';
   $('#postTags').value = normalizeTags(post?.tags).map((tag) => `#${tag}`).join(' ');
   editorImages = normalizeImagePaths(post?.image_urls).map((path) => ({ kind: 'retained', media: 'images', path }));
+  editorExternalLinks = [...(cleanExternalLinks(post?.external_links || []) || [])];
+  $('#externalAttachmentName').value = '';
+  $('#externalAttachmentUrl').value = '';
+  renderExternalAttachments();
   editorAttachments = (post?.attachments || []).map((attachment) => ({ kind: 'retained', media: 'files', attachment }));
   $('#postAttachments').value = '';
   renderAttachmentEditor();
@@ -1396,6 +1421,7 @@ async function savePost(event) {
     content: $('#postContent').value.trim(),
     is_pinned: $('#postPinned').checked,
     is_notice: $('#postNotice').checked,
+    external_links: editorExternalLinks,
     is_confidential: $('#postConfidential').checked
   };
   if (!payload.category_id || !payload.title || !payload.content) {
@@ -1542,14 +1568,15 @@ function bindEvents() {
   $('#postForm').addEventListener('input', markEditorDirty);
   $('#postForm').addEventListener('change', markEditorDirty);
   $('#postImages').addEventListener('change', (event) => {
-    const available = Math.max(0, maxImagesPerPost - editorImages.length);
-    const selected = [...event.target.files];
-    const valid = selected.filter((file) => IMAGE_TYPES.includes(file.type) && file.size > 0 && file.size <= MAX_UPLOAD_BYTES).slice(0, available);
-    editorImages.push(...valid.map((file) => ({ kind: 'pending', media: 'images', file })));
-    if (valid.length !== selected.length) $('#editorMessage').textContent = '이미지는 최대 10장, 한 장당 25MB 이하로 올려주세요.';
+    addEditorImages([...event.target.files]);
     event.target.value = '';
-    if (valid.length) markEditorDirty();
-    renderImageEditor();
+  });
+  $('#editorDialog').addEventListener('paste', (event) => {
+    if (editorSaving) return;
+    const files = [...(event.clipboardData?.items || [])].filter(item => item.kind === 'file' && item.type.startsWith('image/')).map(item => item.getAsFile()).filter(Boolean);
+    if (!files.length) return;
+    event.preventDefault();
+    addEditorImages(files);
   });
   $('#postAttachments').addEventListener('change', (event) => {
     const selected = [...event.target.files];
@@ -1679,12 +1706,12 @@ function bindEvents() {
       setBoardVisibility(false);
     }
   });
-  $('#shortcutToggle').addEventListener('click', () => {
-    const list = $('#shortcutList');
-    const collapsed = list.classList.toggle('is-collapsed');
-    $('#shortcutToggle').textContent = collapsed ? '펼치기' : '접기';
-    $('#shortcutToggle').setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-  });
+  $('#shortcutToggle').addEventListener('click', () => toggleShortcutPanel($('#shortcutPanel').hidden));
+  $('#shortcutClose').addEventListener('click', () => toggleShortcutPanel(false));
+  document.addEventListener('click', event => { if (!event.target.closest('.floating-links')) toggleShortcutPanel(false); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') toggleShortcutPanel(false); });
+  bindFeatureEvents();
+  void initExternalSearch();
   $('#shortcutEditButton').addEventListener('click', openShortcutSettings);
   $$('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => closeDialog(button.dataset.closeDialog)));
   $$('.modal').forEach((dialog) => dialog.addEventListener('click', (event) => { if (event.target === dialog) closeDialog(dialog.id); }));
@@ -1744,3 +1771,124 @@ async function start() {
 }
 
 void start();
+
+function addEditorImages(selected) {
+  if (editorSaving) return;
+  const available = Math.max(0, maxImagesPerPost - editorImages.length);
+  const valid = selected.filter(file => IMAGE_TYPES.includes(file.type) && file.size > 0 && file.size <= MAX_UPLOAD_BYTES).slice(0, available);
+  editorImages.push(...valid.map(file => ({ kind: 'pending', media: 'images', file })));
+  $('#editorMessage').textContent = valid.length !== selected.length ? 'JPG, PNG, WEBP, GIF 이미지를 최대 10장, 한 장당 25MB 이하로 올려주세요.' : '';
+  if (valid.length) markEditorDirty();
+  renderImageEditor();
+}
+
+function renderExternalAttachments() {
+  $('#externalAttachmentList').innerHTML = editorExternalLinks.map((link, index) => `<div class="attachment-row"><span class="attachment-name">🔗 ${escapeHtml(link.name)}</span><span class="attachment-size">${escapeHtml(new URL(link.url).hostname)}</span><button type="button" data-remove-external="${index}" aria-label="${escapeHtml(link.name)} 링크 삭제">삭제</button></div>`).join('');
+}
+
+function toggleShortcutPanel(open) {
+  $('#shortcutPanel').hidden = !open;
+  $('#shortcutToggle').setAttribute('aria-expanded', String(open));
+  $('#shortcutToggle').setAttribute('aria-label', open ? '바로가기 링크 닫기' : '바로가기 링크 열기');
+}
+
+function renderCalendar() {
+  const active = selectedCategory === '캘린더';
+  $('#calendarPanel').hidden = !active;
+  $('#postsPanel').hidden = active;
+  const sorted = [...calendarEvents].sort((a, b) => a.event_date.localeCompare(b.event_date) || a.id.localeCompare(b.id));
+  const urgent = sorted.filter(event => { const days = daysUntil(event.event_date); return days >= 0 && days <= 3; });
+  const banner = $('#urgentEvents');
+  banner.hidden = !isAllCategoriesSelected() || !urgent.length;
+  banner.innerHTML = urgent.map(event => `<article><strong>${daysUntil(event.event_date) === 0 ? '오늘' : 'D-' + daysUntil(event.event_date)} · ${escapeHtml(event.event_date)}</strong><p>${escapeHtml(event.content)}</p></article>`).join('');
+  const upcoming = sorted.filter(event => daysUntil(event.event_date) >= 0);
+  const past = sorted.filter(event => daysUntil(event.event_date) < 0).reverse();
+  $('#calendarList').innerHTML = [...upcoming, ...past].map(event => {
+    const days = daysUntil(event.event_date);
+    return `<article class="calendar-event ${days < 0 ? 'is-past' : days <= 3 ? 'is-urgent' : ''}"><div><strong>${escapeHtml(event.event_date)} · ${days === 0 ? '오늘' : days > 0 ? 'D-' + days : '지난 일정'}</strong><p>${escapeHtml(event.content)}</p></div><div class="calendar-event-actions"><button type="button" class="button button-ghost" data-edit-event="${escapeHtml(event.id)}">수정</button><button type="button" class="button button-ghost" data-delete-event="${escapeHtml(event.id)}">삭제</button></div></article>`;
+  }).join('') || '<p class="empty-state">등록된 일정이 없습니다.</p>';
+}
+
+function resetCalendarForm() {
+  $('#calendarForm').reset();
+  $('#calendarId').value = '';
+  $('#calendarDate').value = koreaToday();
+  $('#calendarCancel').hidden = true;
+}
+
+function bindFeatureEvents() {
+  $('#externalAttachmentAdd').addEventListener('click', () => {
+    if (editorSaving) return;
+    const url = $('#externalAttachmentUrl').value.trim();
+    const name = $('#externalAttachmentName').value.trim() || url;
+    const links = cleanExternalLinks([...editorExternalLinks, { name, url }]);
+    if (!links) { $('#editorMessage').textContent = '파일 이름과 허용된 서비스의 HTTPS 링크를 확인해주세요. 외부 링크는 최대 8개입니다.'; return; }
+    editorExternalLinks = links;
+    $('#externalAttachmentName').value = '';
+    $('#externalAttachmentUrl').value = '';
+    $('#editorMessage').textContent = '';
+    markEditorDirty();
+    renderExternalAttachments();
+  });
+  $('#externalAttachmentList').addEventListener('click', event => {
+    const button = event.target.closest('[data-remove-external]');
+    if (!button || editorSaving) return;
+    editorExternalLinks.splice(Number(button.dataset.removeExternal), 1);
+    markEditorDirty();
+    renderExternalAttachments();
+  });
+  resetCalendarForm();
+  $('#calendarCancel').addEventListener('click', resetCalendarForm);
+  let saving = false;
+  $('#calendarForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (saving) return;
+    saving = true;
+    const form = $('#calendarForm');
+    form.inert = true;
+    const id = $('#calendarId').value;
+    try {
+      const result = await api(id ? '/api/calendar/' + encodeURIComponent(id) : '/api/calendar', { method: id ? 'PATCH' : 'POST', body: JSON.stringify({ event_date: $('#calendarDate').value, content: $('#calendarContent').value }) });
+      calendarEvents = [...calendarEvents.filter(item => item.id !== result.event.id), result.event];
+      resetCalendarForm();
+      renderCalendar();
+      renderCategoryNavigation();
+      $('#calendarMessage').textContent = '일정을 저장했습니다.';
+    } catch (error) { $('#calendarMessage').textContent = error.message; }
+    finally { saving = false; form.inert = false; }
+  });
+  $('#calendarList').addEventListener('click', async event => {
+    const edit = event.target.closest('[data-edit-event]');
+    if (edit && !saving) {
+      const item = calendarEvents.find(item => item.id === edit.dataset.editEvent);
+      if (!item) return;
+      $('#calendarId').value = item.id;
+      $('#calendarDate').value = item.event_date;
+      $('#calendarContent').value = item.content;
+      $('#calendarCancel').hidden = false;
+      $('#calendarContent').focus();
+    }
+    const button = event.target.closest('[data-delete-event]');
+    if (!button || saving || !window.confirm('이 일정을 삭제할까요?')) return;
+    button.disabled = true;
+    try {
+      await api('/api/calendar/' + encodeURIComponent(button.dataset.deleteEvent), { method: 'DELETE' });
+      calendarEvents = calendarEvents.filter(item => item.id !== button.dataset.deleteEvent);
+      if ($('#calendarId').value === button.dataset.deleteEvent) resetCalendarForm();
+      renderCalendar();
+      renderCategoryNavigation();
+      $('#calendarMessage').textContent = '일정을 삭제했습니다.';
+    } catch (error) { $('#calendarMessage').textContent = error.message; button.disabled = false; }
+  });
+  // Recompute at midnight even if the page stays open; refresh on returning to it.
+  window.setInterval(() => { if (currentUser) { renderCalendar(); renderCategoryNavigation(); } }, 60000);
+  document.addEventListener('visibilitychange', async () => {
+    if (document.hidden || !currentUser) return;
+    try {
+      const result = await api('/api/calendar');
+      if (!currentUser) return;
+      calendarEvents = result.events;
+      renderCalendar(); renderCategoryNavigation();
+    } catch { /* The API handles expired sessions; keep the last successful data otherwise. */ }
+  });
+}

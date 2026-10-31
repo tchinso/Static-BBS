@@ -16,6 +16,7 @@ let posts = Array.from({length:12}, (_, index) => ({
   tags:[],author_id:id,author_name:'테스트',is_notice:index<2,is_pinned:true,is_confidential:false,view_count:0,
   created_at:new Date(Date.now()-index*60000).toISOString(),updated_at:new Date().toISOString()
 }));
+let events = [];
 const objects = new Map([[`${id}/test.txt`,Buffer.from('local fixture\n')]]);
 const logs = [];
 const server = createServer(async (req,res) => {
@@ -25,7 +26,17 @@ const server = createServer(async (req,res) => {
     if (url.pathname==='/__qa/logs') return send(logs);
     if (url.pathname.startsWith('/api/')) {
       logs.push({method:req.method,path:url.pathname});
-      if (url.pathname==='/api/bootstrap') return send({user:{id,email:'demo@example.test'},profile:{id,display_name:'테스트',role:'admin'},categories:[category],shortcuts:[],posts});
+      if (url.pathname==='/api/bootstrap') return send({user:{id,email:'demo@example.test'},profile:{id,display_name:'테스트',role:'admin'},categories:[category],shortcuts:[{id,title:'테스트 링크',url:'https://example.com',sort_order:0}],posts,events});
+      if (url.pathname === '/api/calendar' || url.pathname.startsWith('/api/calendar/')) {
+        if (req.method === 'GET') return send({events});
+        const eventId = url.pathname.split('/')[3];
+        if (req.method === 'DELETE') { events = events.filter(item => item.id !== eventId); return send({deleted:true}); }
+        const request = new Request(url,{method:req.method,headers:req.headers,body:Readable.toWeb(req),duplex:'half'});
+        const body = await request.json();
+        const item = {...body,id:eventId || crypto.randomUUID()};
+        events = [...events.filter(e => e.id !== item.id),item];
+        return send({event:item},201);
+      }
       if (url.pathname==='/api/files' || url.pathname==='/api/images') {
         const request = new Request(url,{method:req.method,headers:req.headers,body:Readable.toWeb(req),duplex:'half'});
         if (req.method==='DELETE') { const body=await request.json();for(const path of body.paths) objects.delete(path); return send({discarded:true}); }
@@ -52,7 +63,7 @@ const server = createServer(async (req,res) => {
     }
     const path=resolve(root,`.${decodeURIComponent(url.pathname==='/' ? '/index.html' : url.pathname)}`);
     if(!path.startsWith(root+sep)) return send({error:'missing'},404);
-    const types={'.js':'text/javascript','.css':'text/css','.html':'text/html','.svg':'image/svg+xml','.webmanifest':'application/manifest+json'};
+    const types={'.png':'image/png','.json':'application/json','.js':'text/javascript','.css':'text/css','.html':'text/html','.svg':'image/svg+xml','.webmanifest':'application/manifest+json'};
     const bytes=await readFile(path);res.writeHead(200,{'Content-Type':types[extname(path)]||'application/octet-stream','Cache-Control':'no-store'});res.end(bytes);
   } catch {send({error:'fixture server error'},500);}
 });

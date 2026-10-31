@@ -45,23 +45,32 @@
     <div class="header-inner nav-inner" id="categoryNav"></div>
   </div>
 
+  <section id="urgentEvents" class="urgent-events" aria-label="임박한 일정" hidden></section>
   <main class="page-shell">
     <aside class="sidebar" aria-label="게시판 안내">
       <section class="sidebar-card notice-strip notice-card" id="noticeStrip" hidden aria-label="공지"></section>
-      <section class="sidebar-card shortcut-card">
-        <div class="sidebar-title">
-          <span>바로가기 링크</span>
-          <span class="shortcut-header-actions">
-            <button id="shortcutEditButton" type="button" hidden>수정</button>
-            <button id="shortcutToggle" type="button" aria-controls="shortcutList" aria-expanded="false">펼치기</button>
-          </span>
-        </div>
-        <div class="shortcut-list is-collapsed" id="shortcutList" aria-live="polite"></div>
-      </section>
+
     </aside>
 
     <section class="content">
-      <section class="board-card">
+      <details class="external-search"><summary>외부 사이트 검색</summary>
+        <form id="externalSearchForm" class="external-search-form" role="search">
+          <label>검색어<input id="externalQuery" type="search" placeholder="검색어 입력" required></label>
+          <label>분류<select id="externalSearchCategory" required></select></label>
+          <label>검색 사이트<select id="externalSearchEngine" required></select></label>
+          <button class="button button-primary" type="submit">외부 검색 ↗</button>
+        </form><p id="externalSearchMessage" role="status"></p>
+      </details>
+      <section id="calendarPanel" class="board-card calendar-panel" hidden>
+        <h2>캘린더</h2><p>한국 날짜 기준 · 14일 이내 알림 · 3일 이내 홈 상단 표시</p>
+        <form id="calendarForm" class="calendar-form">
+          <input id="calendarId" type="hidden">
+          <label>날짜<input id="calendarDate" type="date" min="0001-01-01" max="9999-12-31" required></label>
+          <label>내용<textarea id="calendarContent" maxlength="2000" rows="3" required></textarea></label>
+          <div><button class="button button-primary" type="submit">일정 저장</button> <button id="calendarCancel" class="button button-ghost" type="button" hidden>수정 취소</button></div>
+        </form><p id="calendarMessage" role="status"></p><div id="calendarList"></div>
+      </section>
+      <section class="board-card" id="postsPanel">
         <div class="board-toolbar">
           <div>
             <span class="eyebrow" id="boardEyebrow">ALL POSTS</span>
@@ -99,6 +108,20 @@
     </section>
   </main>
 
+  <div class="floating-links">
+      <section class="sidebar-card shortcut-card" id="shortcutPanel" hidden>
+        <div class="sidebar-title">
+          <span>바로가기 링크</span>
+          <span class="shortcut-header-actions">
+            <button id="shortcutEditButton" type="button" hidden>수정</button>
+            <button id="shortcutClose" type="button" aria-label="바로가기 닫기">×</button>
+          </span>
+        </div>
+        <div class="shortcut-list" id="shortcutList" aria-live="polite"></div>
+      </section>
+    <a class="floating-bubble favorites-bubble" href="https://12tw.ju.mp/" aria-label="즐겨찾기 사이트로 이동"><img src="/NKMM/favorites.png" alt="즐겨찾기"></a>
+    <button class="floating-bubble" id="shortcutToggle" type="button" aria-controls="shortcutPanel" aria-expanded="false" aria-label="바로가기 링크 열기">🔗</button>
+  </div>
   <footer class="site-footer">
     <span>냥캣메모</span>
     <span>Cloudflare Pages + Supabase</span>
@@ -120,11 +143,18 @@
       <label>태그<input id="postTags" maxlength="180" placeholder="#캐릭터 #관계성 #프롬프트 (최대 8개)"></label>
       <label>내용<textarea id="postContent" rows="12" maxlength="10000" placeholder="내용을 입력하세요" required></textarea></label>
       <label>이미지<input id="postImages" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple></label>
-      <p class="upload-help">JPG, PNG, WEBP, GIF · 한 장당 25MB 이하 · 최대 10장 · 이미지를 드래그해 순서를 바꿀 수 있어요.</p>
+      <p class="upload-help">JPG, PNG, WEBP, GIF · 한 장당 25MB 이하 · 최대 10장 · 작성창에 Ctrl+V로 이미지 붙여넣기 · 드래그로 순서 변경</p>
       <div class="image-editor-list" id="imageEditorList"></div>
       <label>첨부파일<input id="postAttachments" type="file" multiple aria-describedby="attachmentUsage"></label>
       <p class="upload-help" id="attachmentUsage">0/8개 · 0 B / 25MB (이미지 제외)</p>
       <div id="attachmentEditorList" class="attachment-list" aria-live="polite"></div>
+      <fieldset class="external-attachment-fields"><legend>외부 첨부 링크</legend>
+        <p class="upload-help">app.koofr.net · filedn.com · transfer.it · 최대 8개 · Storage 용량 미사용</p>
+        <label>파일 이름<input id="externalAttachmentName" maxlength="200" placeholder="첨부파일 이름"></label>
+        <label>공유 링크<input id="externalAttachmentUrl" type="url" maxlength="4096" placeholder="https://filedn.com/..."></label>
+        <button id="externalAttachmentAdd" class="button button-ghost" type="button">링크 추가</button>
+        <div id="externalAttachmentList" class="attachment-list" aria-live="polite"></div>
+      </fieldset>
       <div class="editor-options">
         <label class="check-label"><input id="postPinned" type="checkbox"> 별표</label>
         <label class="check-label"><input id="postNotice" type="checkbox"> 공지글로 등록 (최대 2개)</label>

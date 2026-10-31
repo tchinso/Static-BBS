@@ -1,3 +1,4 @@
+import { cleanExternalLinks } from '../../shared/features.js';
 import { MAX_IMAGES } from '../../shared/limits.js';
 import { restQuery, firstRow, rpc } from './database.js';
 import { objectKey, isUuid } from '../../shared/validation.js';
@@ -10,7 +11,7 @@ const SHARE_TAG_LOWERCASE = 'abcdefghijklmnopqrstuvwxyz';
 const SHARE_TAG_DIGITS = '0123456789';
 const SHARE_TAG_CHARACTERS = `${SHARE_TAG_UPPERCASE}${SHARE_TAG_LOWERCASE}${SHARE_TAG_DIGITS}`;
 const SHARE_TAG_LENGTH = 6;
-const POST_SELECT = 'id,category_id,title,tags,content,image_urls,attachments,author_id,author_name,is_notice,is_confidential,is_pinned,view_count,created_at,updated_at,community_categories(id,name)';
+const POST_SELECT = 'id,category_id,title,tags,content,image_urls,attachments,external_links,author_id,author_name,is_notice,is_confidential,is_pinned,view_count,created_at,updated_at,community_categories(id,name)';
 
 export function cleanText(value, { min = 0, max, trim = true } = {}) {
   if (typeof value !== 'string') return null;
@@ -139,7 +140,8 @@ export function presentPost(post, env) {
     category: categoryName,
     community_categories: undefined,
     image_urls: imagePaths,
-    attachments: cleanAttachments(post?.attachments ?? []) || []
+    attachments: cleanAttachments(post?.attachments ?? []) || [],
+    external_links: cleanExternalLinks(post?.external_links ?? []) || []
   };
 }
 
@@ -244,6 +246,11 @@ export function makePostFields(body, env, { creating = false, profile = null, us
     const attachments = cleanAttachments(body.attachments ?? []);
     if (!attachments) return { error: '첨부파일은 최대 8개, 총 25MB 이하로 올려주세요.' };
     fields.attachments = attachments;
+  }
+  if (creating || 'external_links' in body) {
+    const links = cleanExternalLinks(body.external_links ?? []);
+    if (!links) return { error: '외부 첨부는 허용된 세 서비스의 HTTPS 링크로 최대 8개까지 등록할 수 있습니다.' };
+    fields.external_links = links;
   }
   if (!writeBoolean(body, 'is_notice', fields) || !writeBoolean(body, 'is_pinned', fields) || !writeBoolean(body, 'is_confidential', fields)) {
     return { error: '별표, 공지 또는 기밀 자료 설정을 확인해주세요.' };
