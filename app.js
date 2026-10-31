@@ -688,7 +688,7 @@ function renderCategoryNavigation() {
   const navigation = $('#categoryNav');
   if (!navigation) return;
   navigation.innerHTML = `
-    <button class="nav-item ${selectedCategory === '캘린더' ? 'is-active' : ''}" type="button" data-category-id="캘린더">캘린더${calendarEvents.some(event => { const days = daysUntil(event.event_date); return days >= 0 && days <= 14; }) ? '<span class="calendar-dot" role="img" aria-label="14일 이내 일정 있음"></span>' : ''}</button>
+    <button class="nav-item ${selectedCategory === '캘린더' ? 'is-active' : ''}" type="button" data-category-id="캘린더"><span role="img" aria-label="캘린더">🗓️</span>${calendarEvents.some(event => { const days = daysUntil(event.event_date); return days >= 0 && days <= 14; }) ? '<span class="calendar-dot" role="img" aria-label="14일 이내 일정 있음"></span>' : ''}</button>
     <button class="nav-item ${isAllCategoriesSelected() ? 'is-active' : ''}" type="button" data-view="all">전체글</button>
     ${categories.map((category) => `
       <button class="nav-item ${selectedCategory === category.id ? 'is-active' : ''}" type="button" data-category-id="${escapeHtml(category.id)}">${escapeHtml(category.name)}</button>
