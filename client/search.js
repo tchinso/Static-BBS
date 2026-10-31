@@ -1,6 +1,22 @@
 import { convertSearchList, searchUrl } from '../shared/features.js';
 
 export async function initExternalSearch() {
+  const panel = document.querySelector('#externalSearchPanel');
+  const toggle = document.querySelector('#externalSearchToggle');
+  const storageKey = 'nyangcatmemoSearchExpanded';
+  const setOpen = (open, focus = false) => {
+    panel.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.textContent = open ? '⌄ 접기' : '🔎 검색';
+    try { localStorage.setItem(storageKey, String(open)); } catch { /* Optional preference. */ }
+    if (focus && open) document.querySelector('#externalQuery').focus();
+  };
+  let remembered = false;
+  try { remembered = localStorage.getItem(storageKey) === 'true'; } catch { /* Optional preference. */ }
+  setOpen(remembered);
+  toggle.addEventListener('click', () => setOpen(panel.hidden, true));
+  document.querySelector('#externalSearchClose').addEventListener('click', () => { setOpen(false); toggle.focus(); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && !panel.hidden) { setOpen(false); toggle.focus(); } });
   const category = document.querySelector('#externalSearchCategory');
   const engine = document.querySelector('#externalSearchEngine');
   const message = document.querySelector('#externalSearchMessage');

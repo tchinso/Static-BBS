@@ -1787,6 +1787,7 @@ function renderExternalAttachments() {
 }
 
 function toggleShortcutPanel(open) {
+  if (open && !$('#externalSearchPanel').hidden) $('#externalSearchClose').click();
   $('#shortcutPanel').hidden = !open;
   $('#shortcutToggle').setAttribute('aria-expanded', String(open));
   $('#shortcutToggle').setAttribute('aria-label', open ? '바로가기 링크 닫기' : '바로가기 링크 열기');
@@ -1817,6 +1818,7 @@ function resetCalendarForm() {
 }
 
 function bindFeatureEvents() {
+  $('.brand').addEventListener('click', event => { event.preventDefault(); setCategory('전체글'); });
   $('#externalAttachmentAdd').addEventListener('click', () => {
     if (editorSaving) return;
     const url = $('#externalAttachmentUrl').value.trim();

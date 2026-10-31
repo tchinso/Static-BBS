@@ -6,3 +6,4 @@ Thumbs.db
 .dev.vars
 .dev.vars.*
 .wrangler/
+supabase/.temp/

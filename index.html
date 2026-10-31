@@ -53,14 +53,7 @@
     </aside>
 
     <section class="content">
-      <details class="external-search"><summary>외부 사이트 검색</summary>
-        <form id="externalSearchForm" class="external-search-form" role="search">
-          <label>검색어<input id="externalQuery" type="search" placeholder="검색어 입력" required></label>
-          <label>분류<select id="externalSearchCategory" required></select></label>
-          <label>검색 사이트<select id="externalSearchEngine" required></select></label>
-          <button class="button button-primary" type="submit">외부 검색 ↗</button>
-        </form><p id="externalSearchMessage" role="status"></p>
-      </details>
+
       <section id="calendarPanel" class="board-card calendar-panel" hidden>
         <h2>캘린더</h2><p>한국 날짜 기준 · 14일 이내 알림 · 3일 이내 홈 상단 표시</p>
         <form id="calendarForm" class="calendar-form">
@@ -108,6 +101,15 @@
     </section>
   </main>
 
+      <section class="external-search" id="externalSearchPanel" hidden aria-label="외부 사이트 검색"><div class="external-search-heading"><strong>외부 사이트 검색</strong><button id="externalSearchClose" class="icon-button" type="button" aria-label="외부 검색 접기">×</button></div>
+        <form id="externalSearchForm" class="external-search-form" role="search">
+          <label>검색어<input id="externalQuery" type="search" placeholder="검색어 입력" required></label>
+          <label>분류<select id="externalSearchCategory" required></select></label>
+          <label>검색 사이트<select id="externalSearchEngine" required></select></label>
+          <button class="button button-primary" type="submit">외부 검색 ↗</button>
+        </form><p id="externalSearchMessage" role="status"></p>
+      </section>
+  <button id="externalSearchToggle" class="search-bubble" type="button" aria-controls="externalSearchPanel" aria-expanded="false">🔎 검색</button>
   <div class="floating-links">
       <section class="sidebar-card shortcut-card" id="shortcutPanel" hidden>
         <div class="sidebar-title">
@@ -119,8 +121,8 @@
         </div>
         <div class="shortcut-list" id="shortcutList" aria-live="polite"></div>
       </section>
-    <a class="floating-bubble favorites-bubble" href="https://12tw.ju.mp/" aria-label="즐겨찾기 사이트로 이동"><img src="/NKMM/favorites.png" alt="즐겨찾기"></a>
     <button class="floating-bubble" id="shortcutToggle" type="button" aria-controls="shortcutPanel" aria-expanded="false" aria-label="바로가기 링크 열기">🔗</button>
+    <a class="floating-bubble favorites-bubble" href="https://12tw.ju.mp/" aria-label="즐겨찾기 사이트로 이동"><img src="/NKMM/favorites.png" alt="즐겨찾기"></a>
   </div>
   <footer class="site-footer">
     <span>냥캣메모</span>
