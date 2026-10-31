@@ -151,23 +151,23 @@
   },
   {
     "type": "engine",
-    "name": "Nyaa (Sukebei)",
+    "name": "Nyaa (R18, VPN필요)",
     "url": "https://sukebei.nyaa.si/?q=imouto"
   },
   {
     "type": "engine",
-    "name": "Nyaa(All Ages)",
-    "url": "https://nyaa.si/?q=imouto"
+    "name": "Nyaa(R18, 미러, VPN필요)",
+    "url": "https://sukebei.nyaa.mom/?f=0&c=0_0&q=imouto"
   },
   {
     "type": "engine",
-    "name": "Nyaa(Sukebei, 대체)",
+    "name": "Nyaa(R18, 미러)",
+    "url": "https://sukebei.nyaa.media/?f=0&c=0_0&q=imouto"
+  },
+  {
+    "type": "engine",
+    "name": "Nyaa(R18, 독립미러)",
     "url": "https://sukebei.nyaa.net/?f=0&c=0_0&q=imouto"
-  },
-  {
-    "type": "engine",
-    "name": "Nyaa(All Ages, 대체)",
-    "url": "https://nyaa.net/?f=0&c=0_0&q=imouto"
   },
   {
     "type": "engine",
