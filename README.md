@@ -28,6 +28,7 @@ Production과 Preview 환경 모두에 다음 **Encrypted Secret**을 만듭니�
 
 1. 새 프로젝트는 SQL Editor에서 [supabase-schema.sql](./supabase-schema.sql)을 한 번 실행합니다.
    이미 운영 중인 프로젝트에는 전체 스키마 파일을 다시 실행하지 말고, 아직 적용하지 않은 migration만 시간순으로 실행합니다. 이번 카테고리·바로가기 전환에는 [20260905-confidential-posts.sql](./supabase-migrations/20260905-confidential-posts.sql)을 아직 적용하지 않았다면 먼저 실행한 뒤, [20260907-editable-categories.sql](./supabase-migrations/20260907-editable-categories.sql)와 [20260907-editable-shortcuts.sql](./supabase-migrations/20260907-editable-shortcuts.sql)을 차례로 한 번 실행합니다.
+   일정별 표시 기간을 포함한 버전을 배포하기 전에 [20261126105918_calendar_display_windows.sql](./supabase-migrations/20261126105918_calendar_display_windows.sql)을 적용합니다.
 2. `private.community_allowed_email_hashes`에 허용 이메일의 SHA-256 값을 추가합니다. 원문 이메일은 SQL 파일에 기록하지 않습니다.
 3. Authentication → Hooks에서 **Before User Created**에 `public.community_before_user_created` Postgres 함수를 선택합니다.
 4. Authentication → URL Configuration에서 Site URL과 Redirect URL을 모두 `https://nkmm.pages.dev/`로 설정합니다.
@@ -56,6 +57,6 @@ Production과 Preview 환경 모두에 다음 **Encrypted Secret**을 만듭니�
 - 운영 DB에 `supabase-migrations/20261031184155_calendar_external_links.sql`을 먼저 적용하고 Pages를 배포합니다. 기존 파일 업로드와 Storage 정리 로직은 유지됩니다.
 - 외부 첨부는 `https://app.koofr.net/`, `https://filedn.com/`, `https://transfer.it/`만 허용하며, 파일 이름과 공유 링크를 입력하고 **링크 추가**를 누릅니다. 직접 첨부(8개/합계 25MiB)와 별도로 외부 링크 8개를 저장할 수 있습니다. 외부 링크는 Storage 업로드·정리 대상이 아닙니다.
 - 글 작성창 어디에서나 Ctrl+V로 클립보드 이미지를 추가합니다. 일반 텍스트 붙여넣기는 그대로 동작하며 이미지 형식·장수·용량 제한은 파일 선택과 같습니다.
-- 캘린더는 승인 사용자끼리 공유하며 날짜·내용 추가, 수정, 삭제가 가능합니다. 한국 날짜 기준 오늘부터 14일 이내는 탭에 빨간 점, 3일 이내는 전체글 홈 최상단에 표시합니다. 지난 일정은 캘린더에 남지만 알림에서는 제외합니다. 페이지를 켜둔 경우에도 매분 날짜를 다시 계산합니다.
+- 캘린더는 승인 사용자끼리 공유합니다. 일정마다 전체글 홈 상단에 표시하기 시작할 시점(1~7일 전)과 캘린더 탭에 빨간 점을 표시하기 시작할 시점(3~30일 전)을 지정할 수 있습니다. 기본값은 각각 3일과 14일입니다. 한국 날짜를 기준으로 일정 당일까지 표시하며, 페이지를 켜둔 경우에도 매분 날짜를 다시 계산합니다.
 - 오른쪽 아래는 왼쪽 🔗, 오른쪽 즐겨찾기 순서의 두 버블이 스크롤과 관계없이 고정됩니다. 즐겨찾기 이미지는 `NKMM/favorites.png`이며 클릭하면 `https://12tw.pages.dev/`로 이동합니다. 🔗는 기존 바로가기 목록과 수정 메뉴를 엽니다.
 - 외부 검색은 화면 아래 중앙의 🔎 검색 버블로 열고 접으며, 펼침 상태를 기억합니다. `NKMM/search-list.json`을 직접 읽고, 원본의 `type: category / engine` 배열을 분류별 선택기로 자동 변환합니다. URL의 `imouto`를 인코딩한 검색어로 치환합니다. 제공된 `converted search-list.txt`의 검색 동작을 모듈로 구현했으므로 TXT를 수동 생성하거나 실행할 필요가 없습니다. JSON만 저장소에 커밋/푸시하면 Pages 배포 후 반영됩니다. 검색 목록은 Supabase를 사용하지 않으며 PWA 데이터 캐시에도 저장하지 않습니다.

@@ -1,6 +1,12 @@
 import { singleFlight } from './single-flight.js';
 const userLookup = singleFlight();
 const tokenRefresh = singleFlight();
+const rejectedSessionCodes = new Set([
+  'bad_jwt', 'invalid_credentials', 'refresh_token_already_used', 'refresh_token_not_found',
+  'session_expired', 'session_not_found', 'user_banned', 'user_not_found'
+]);
+
+export class AuthServiceUnavailable extends Error {}
 function requiredString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
@@ -81,7 +87,8 @@ export async function supabaseJson(env, path, options = {}) {
   const response = await fetch(makeUrl(env, path), {
     method: options.method || 'GET',
     headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body)
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    signal: options.signal
   });
   let data = null;
   const text = await response.text();
@@ -108,29 +115,34 @@ export async function supabaseRaw(env, path, options = {}) {
   });
 }
 
+async function authSessionRequest(env, path, operation, options) {
+  let result;
+  try {
+    result = await supabaseJson(env, path, { ...options, signal: AbortSignal.timeout(7000) });
+  } catch {
+    console.error('auth_service_unavailable', { operation });
+    throw new AuthServiceUnavailable();
+  }
+  const { response, data } = result;
+  const code = data?.error_code ?? data?.code;
+  if (response.ok && data) return data;
+  if (response.status >= 400 && response.status < 500 && rejectedSessionCodes.has(code)) return null;
+  console.error('auth_service_unavailable', { operation, status: response.status });
+  throw new AuthServiceUnavailable();
+}
+
+function authUser(data) {
+  if (typeof data?.id !== 'string' || !data.id) return null;
+  return { id: data.id, email: normalizeEmail(data.email) };
+}
+
 async function lookupAuthUser(env, accessToken) {
   if (typeof accessToken !== 'string' || accessToken.length < 16) return null;
-  try {
-    const { response, data } = await supabaseJson(env, '/auth/v1/user', { accessToken });
-    if (!response.ok || !data || typeof data.id !== 'string') {
-      // Keep enough private observability to diagnose a failed callback
-      // without logging the JWT, email, or Supabase response body.
-      console.error('auth_user_lookup_rejected', {
-        status: response.status,
-        hasUserId: typeof data?.id === 'string'
-      });
-      return null;
-    }
-    const email = normalizeEmail(data.email);
-    if (!email) {
-      console.error('auth_user_lookup_rejected', { status: response.status, hasUserId: true });
-      return null;
-    }
-    return { id: data.id, email };
-  } catch {
-    console.error('auth_user_lookup_failed');
-    return null;
-  }
+  const data = await authSessionRequest(env, '/auth/v1/user', 'lookup', { accessToken });
+  if (!data) return null;
+  const user = authUser(data);
+  if (!user) throw new AuthServiceUnavailable();
+  return user;
 }
 
 export async function requestMagicLink(env, email) {
@@ -147,19 +159,16 @@ export async function requestMagicLink(env, email) {
 
 async function refreshSession(env, refreshToken) {
   if (!isSupabaseRefreshToken(refreshToken)) return null;
-  try {
-    const { response, data } = await supabaseJson(env, '/auth/v1/token?grant_type=refresh_token', {
-      method: 'POST',
-      auth: true,
-      body: { refresh_token: refreshToken }
-    });
-    if (!response.ok || !data || typeof data.access_token !== 'string' || typeof data.refresh_token !== 'string') {
-      return null;
-    }
-    return data;
-  } catch {
-    return null;
+  const data = await authSessionRequest(env, '/auth/v1/token?grant_type=refresh_token', 'refresh', {
+    method: 'POST',
+    auth: true,
+    body: { refresh_token: refreshToken }
+  });
+  if (!data) return null;
+  if (typeof data.access_token !== 'string' || data.access_token.length < 16 || !isSupabaseRefreshToken(data.refresh_token)) {
+    throw new AuthServiceUnavailable();
   }
+  return { ...data, user: authUser(data.user) };
 }
 
 export async function revokeAuthSession(env, accessToken) {

@@ -1,5 +1,6 @@
-import { cleanExternalLinks, daysUntil, koreaToday } from './shared/features.js';
+import { calendarWindowDays, cleanExternalLinks, daysUntil, koreaToday } from './shared/features.js';
 import { initExternalSearch } from './client/search.js';
+import { retryStartup } from './client/startup.js';
 import { objectKey } from './shared/validation.js';
 import { MAX_IMAGES, MAX_UPLOAD_BYTES, IMAGE_TYPES, MAX_SHORTCUT_URL, attachmentLimitError } from './shared/limits.js';
 import { uploadEntries, discardEntries, formatBytes } from './client/uploads.js';
@@ -27,7 +28,7 @@ let filteredPosts = [];
 let selectedCategory = '전체글';
 let searchTerm = '';
 let currentPage = 1;
-let viewMode = localStorage.getItem(viewModeStorageKey) === 'gallery' ? 'gallery' : 'list';
+let viewMode = readPreference(viewModeStorageKey) === 'gallery' ? 'gallery' : 'list';
 let selectedPost = null;
 let editorImages = [];
 let editorAttachments = [];
@@ -39,9 +40,10 @@ let categoryDeleteTarget = null;
 let editingShortcutId = null;
 let shortcutDeleteTarget = null;
 let bootStatusTimer = null;
-let bootRecoveryTimer = null;
-
-const STARTUP_AUTH_RECOVERY_TIMEOUT_MS = 8100;
+let startupPromise = null;
+let pendingMagicLink = null;
+let awaitingMagicLink = false;
+let sessionChannel;
 
 // The app shell is static, so avoid repeatedly parsing and traversing the same selectors.
 const elementCache = new Map();
@@ -222,18 +224,22 @@ function reconcileSelectedCategory() {
   if (!isAllCategoriesSelected() && selectedCategory !== '별표' && selectedCategory !== '캘린더' && !categoryById(selectedCategory)) selectedCategory = '전체글';
 }
 
+function readPreference(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function savePreference(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* The current tab can still be used. */ }
+}
+
 function rememberLoginEnabled() {
-  return localStorage.getItem(rememberLoginSettingKey) !== 'false';
+  return readPreference(rememberLoginSettingKey) !== 'false';
 }
 
 function clearBootStatusTimer() {
   if (bootStatusTimer !== null) {
     window.clearTimeout(bootStatusTimer);
     bootStatusTimer = null;
-  }
-  if (bootRecoveryTimer !== null) {
-    window.clearTimeout(bootRecoveryTimer);
-    bootRecoveryTimer = null;
   }
 }
 
@@ -257,10 +263,10 @@ function showConnectionRecoveryGate() {
   gate.hidden = false;
   gate.dataset.state = 'recovery';
   gate.setAttribute('aria-busy', 'false');
-  $('#authGateTitle').textContent = '로그인 확인에 실패했습니다.';
-  $('#authGateMessage').textContent = '로그인 상태를 확인하지 못했습니다. 다시 로그인해주세요.';
+  $('#authGateTitle').textContent = '게시판에 연결하지 못했습니다.';
+  $('#authGateMessage').textContent = '연결을 다시 시도하거나 인터넷 연결이 복구될 때까지 기다려주세요.';
   $('#authGateProgress').hidden = true;
-  $('#gateLoginButton').hidden = false;
+  $('#gateLoginButton').hidden = true;
   $('#authGateRetryButton').hidden = false;
 }
 
@@ -281,10 +287,6 @@ function showBootLoading() {
     $('#authGateMessage').textContent = '연결 상태에 따라 조금 더 걸릴 수 있어요. 로그인 정보를 계속 확인하고 있습니다.';
     $('#authGateProgressLabel').textContent = '게시판을 준비하는 중입니다.';
   }, 1200);
-  bootRecoveryTimer = window.setTimeout(() => {
-    if (gate.dataset.state !== 'checking') return;
-    showConnectionRecoveryGate();
-  }, STARTUP_AUTH_RECOVERY_TIMEOUT_MS);
 }
 
 function setBoardVisibility(visible, message = '승인된 이메일로 로그인하면 게시판을 볼 수 있습니다.') {
@@ -316,9 +318,9 @@ async function api(path, options = {}) {
   const contentType = response.headers.get('content-type') || '';
   const body = contentType.includes('application/json') ? await response.json().catch(() => ({})) : {};
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401 && !deferUnauthorizedGate) {
       clearBoardState();
-      if (!deferUnauthorizedGate) setBoardVisibility(false);
+      setBoardVisibility(false);
     }
     throw createApiError(body.error || body.message || '요청을 처리하지 못했습니다.', response.status);
   }
@@ -396,17 +398,13 @@ function clearPendingSharedSearchTerm() {
   }
 }
 
-function hasMagicLinkSessionFragment() {
-  const fragment = new URLSearchParams(window.location.hash.slice(1));
-  return fragment.has('access_token') || fragment.has('refresh_token');
-}
-
 function prepareSharedSearch() {
   const urlSearch = sharedSearchTermFromLocation();
   if (urlSearch) rememberSharedSearchTerm(urlSearch);
   // A pending link is only restored after the magic-link callback, so an
   // abandoned link does not unexpectedly open during a later normal visit.
-  const search = urlSearch || (hasMagicLinkSessionFragment() ? pendingSharedSearchTerm() : '');
+  const fromMagicLink = pendingMagicLink?.body || pendingMagicLink?.signedIn;
+  const search = urlSearch || (fromMagicLink ? pendingSharedSearchTerm() : '');
   if (!search) return '';
 
   selectedCategory = '전체글';
@@ -497,13 +495,23 @@ function isConfidential(post) {
   return Boolean(post?.is_confidential);
 }
 
-async function loadBoard({ deferUnauthorizedGate = false } = {}) {
-  const data = await api('/api/bootstrap', { deferUnauthorizedGate });
-  applyBoardData(data);
+async function startupApi(path, options = {}, validate) {
+  return retryStartup(async () => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 16_000);
+    try {
+      const data = await api(path, { ...options, deferUnauthorizedGate: true, signal: controller.signal });
+      if (!validate(data)) throw createApiError('서버 응답을 확인하지 못했습니다.', 502);
+      return data;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  });
 }
 
-async function loadStartupBoard() {
-  await loadBoard({ deferUnauthorizedGate: true });
+function validBoardData(data) {
+  return Boolean(data?.user?.id && data.profile && Array.isArray(data.posts) &&
+    Array.isArray(data.categories) && Array.isArray(data.shortcuts) && Array.isArray(data.events));
 }
 
 function applyBoardData(data) {
@@ -514,8 +522,8 @@ function applyBoardData(data) {
   posts = (data.posts || []).map(normalizePost);
   calendarEvents = data.events || [];
   reconcileSelectedCategory();
-  setBoardVisibility(true);
   renderAll();
+  setBoardVisibility(true);
 }
 
 function applyFilters() {
@@ -687,8 +695,13 @@ function renderPagination(totalPages) {
 function renderCategoryNavigation() {
   const navigation = $('#categoryNav');
   if (!navigation) return;
+  const today = koreaToday();
+  const hasNotification = calendarEvents.some((event) => {
+    const days = daysUntil(event.event_date, today);
+    return days >= 0 && days <= calendarWindowDays(event, 'notification_days');
+  });
   navigation.innerHTML = `
-    <button class="nav-item ${selectedCategory === '캘린더' ? 'is-active' : ''}" type="button" data-category-id="캘린더"><span role="img" aria-label="캘린더">🗓️</span>${calendarEvents.some(event => { const days = daysUntil(event.event_date); return days >= 0 && days <= 14; }) ? '<span class="calendar-dot" role="img" aria-label="14일 이내 일정 있음"></span>' : ''}</button>
+    <button class="nav-item ${selectedCategory === '캘린더' ? 'is-active' : ''}" type="button" data-category-id="캘린더"><span role="img" aria-label="캘린더">🗓️</span>${hasNotification ? '<span class="calendar-dot" role="img" aria-label="다가오는 일정 알림"></span>' : ''}</button>
     <button class="nav-item ${isAllCategoriesSelected() ? 'is-active' : ''}" type="button" data-view="all">전체글</button>
     ${categories.map((category) => `
       <button class="nav-item ${selectedCategory === category.id ? 'is-active' : ''}" type="button" data-category-id="${escapeHtml(category.id)}">${escapeHtml(category.name)}</button>
@@ -1480,10 +1493,11 @@ async function submitLogin(event) {
   const message = $('#loginMessage');
   const email = $('#loginEmail').value.trim();
   const persistent = $('#rememberLogin').checked;
-  localStorage.setItem(rememberLoginSettingKey, persistent ? 'true' : 'false');
+  savePreference(rememberLoginSettingKey, persistent ? 'true' : 'false');
   message.textContent = '로그인 링크를 보내는 중...';
   try {
     await api('/api/auth/request', { method: 'POST', body: JSON.stringify({ email, persistent }) });
+    awaitingMagicLink = true;
     message.textContent = '메일함의 가장 최근 로그인 메일을 열고, 안내 화면에서 로그인 계속하기를 눌러주세요.';
   } catch (error) {
     // Do not present a failed server request as if a link was sent. The API
@@ -1494,31 +1508,40 @@ async function submitLogin(event) {
   }
 }
 
-async function consumeMagicLink() {
+function readMagicLink() {
   const fragment = new URLSearchParams(window.location.hash.slice(1));
   const errorCode = fragment.get('error_code');
-  if (errorCode) {
-    window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
-    return { errorCode };
-  }
   const accessToken = fragment.get('access_token');
   const refreshToken = fragment.get('refresh_token');
-  if (!accessToken || !refreshToken) return { errorCode: null };
-  let callback;
+  if (!errorCode && !accessToken && !refreshToken) return null;
+  // Retain the callback only in memory so a transient error can be retried.
+  window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
+  if (errorCode || !accessToken || !refreshToken) return { errorCode: errorCode || 'invalid_link' };
+  return {
+    body: JSON.stringify({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expires_in: Number(fragment.get('expires_in') || 0),
+      persistent: rememberLoginEnabled()
+    })
+  };
+}
+
+async function consumeMagicLink() {
+  if (!pendingMagicLink?.body) return null;
   try {
-    callback = await api('/api/auth/callback', {
+    const callback = await startupApi('/api/auth/callback', {
       method: 'POST',
-      body: JSON.stringify({
-        access_token: accessToken,
-        refresh_token: refreshToken,
-        expires_in: Number(fragment.get('expires_in') || 0),
-        persistent: rememberLoginEnabled()
-      })
-    });
-  } finally {
-    window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
+      body: pendingMagicLink.body
+    }, (data) => data?.authenticated === true && Boolean(data.user?.id));
+    pendingMagicLink = { signedIn: true };
+    sessionChannel?.postMessage('signed-in');
+    return validBoardData(callback.bootstrap) ? callback.bootstrap : null;
+  } catch (error) {
+    if (![400, 401, 403].includes(error.status)) throw error;
+    pendingMagicLink = { errorCode: 'invalid_link' };
+    return null;
   }
-  return { errorCode: null, bootstrap: callback?.bootstrap || null };
 }
 
 function bindEvents() {
@@ -1526,7 +1549,7 @@ function bindEvents() {
     const button = event.target.closest('[data-view-mode]');
     if (!button || button.dataset.viewMode === viewMode) return;
     viewMode = button.dataset.viewMode;
-    localStorage.setItem(viewModeStorageKey, viewMode);
+    savePreference(viewModeStorageKey, viewMode);
     currentPage = 1;
     renderPosts();
   });
@@ -1652,7 +1675,7 @@ function bindEvents() {
   $('#sharePostButton').addEventListener('click', () => void copyPostShareLink());
   $('#loginButton').addEventListener('click', () => currentUser ? openProfile() : openLogin());
   $('#gateLoginButton').addEventListener('click', openLogin);
-  $('#authGateRetryButton').addEventListener('click', () => window.location.reload());
+  $('#authGateRetryButton').addEventListener('click', () => void resumeStartup());
   $('#loginForm').addEventListener('submit', submitLogin);
   $('#profileForm').addEventListener('submit', saveProfile);
   $('#categoryAddForm').addEventListener('submit', (event) => void addCategory(event));
@@ -1711,7 +1734,6 @@ function bindEvents() {
   document.addEventListener('click', event => { if (!event.target.closest('.floating-links')) toggleShortcutPanel(false); });
   document.addEventListener('keydown', event => { if (event.key === 'Escape') toggleShortcutPanel(false); });
   bindFeatureEvents();
-  void initExternalSearch();
   $('#shortcutEditButton').addEventListener('click', openShortcutSettings);
   $$('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => closeDialog(button.dataset.closeDialog)));
   $$('.modal').forEach((dialog) => dialog.addEventListener('click', (event) => { if (event.target === dialog) closeDialog(dialog.id); }));
@@ -1731,43 +1753,75 @@ function bindEvents() {
 
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch((error) => console.warn('Service worker registration failed.', error));
-  });
+  const register = () => navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+    .catch((error) => console.warn('Service worker registration failed.', error));
+  if (document.readyState === 'complete') void register();
+  else window.addEventListener('load', register, { once: true });
 }
 
-async function start() {
+function resumeStartup() {
+  if (startupPromise) return startupPromise;
   showBootLoading();
+  startupPromise = restoreBoard().finally(() => { startupPromise = null; });
+  return startupPromise;
+}
+
+async function restoreBoard() {
+  const sharedSearch = prepareSharedSearch();
+  try {
+    const bootstrap = (pendingMagicLink?.body ? await consumeMagicLink() : null) ||
+      await startupApi('/api/bootstrap', {}, validBoardData);
+    applyBoardData(bootstrap);
+  } catch (error) {
+    if (error.status === 401) {
+      clearBoardState();
+      const code = pendingMagicLink?.errorCode;
+      setBoardVisibility(false, code === 'otp_expired'
+        ? '로그인 링크가 이미 사용되었거나 만료되었습니다. 가장 최근 로그인 메일에서 계속해주세요.'
+        : code ? '로그인 링크를 확인하지 못했습니다. 새 로그인 메일을 요청해주세요.' : undefined);
+      pendingMagicLink = null;
+    } else {
+      console.error(error);
+      showConnectionRecoveryGate();
+    }
+    return;
+  }
+
+  pendingMagicLink = null;
+  awaitingMagicLink = false;
+  if ($('#loginDialog').open) $('#loginDialog').close();
+  clearPendingSharedSearchTerm();
+  const post = sharedSearch ? preferredSearchResult(sharedSearch) : null;
+  if (post) void openViewer(post.id).catch((error) => console.error(error));
+}
+
+function start() {
   if (boardConfig.siteName) {
     document.title = boardConfig.siteName;
     $('.brand strong').textContent = boardConfig.siteName;
     $('.site-footer span').textContent = boardConfig.siteName;
   }
   $('#rememberLogin').checked = rememberLoginEnabled();
+  pendingMagicLink = readMagicLink();
+  try {
+    sessionChannel = new BroadcastChannel('nyangcatmemo-session');
+    sessionChannel.addEventListener('message', async (event) => {
+      if (event.data !== 'signed-in') return;
+      await startupPromise;
+      if (!currentUser) void resumeStartup();
+    });
+  } catch { /* Some browsers disable cross-tab messaging. */ }
+  const resumeAfterReturn = () => {
+    if (!document.hidden && !$('#authGate').hidden &&
+      ($('#authGate').dataset.state === 'recovery' || (awaitingMagicLink && !sessionChannel))) void resumeStartup();
+  };
+  window.addEventListener('online', resumeAfterReturn);
+  window.addEventListener('pageshow', resumeAfterReturn);
+  document.addEventListener('visibilitychange', resumeAfterReturn);
+  const startup = resumeStartup();
   bindEvents();
   registerServiceWorker();
-  const sharedSearch = prepareSharedSearch();
-  try {
-    const magicLink = await consumeMagicLink();
-    if (magicLink?.errorCode) {
-      setBoardVisibility(false, magicLink.errorCode === 'otp_expired'
-        ? '로그인 링크가 이미 사용되었거나 만료되었습니다. 가장 최근 로그인 메일의 안내 화면에서 로그인 계속하기를 눌러주세요.'
-        : '로그인 링크를 확인하지 못했습니다. 새 로그인 메일을 요청한 뒤 다시 시도해주세요.');
-      return;
-    }
-    if (magicLink?.bootstrap) applyBoardData(magicLink.bootstrap);
-    else await loadStartupBoard();
-    clearPendingSharedSearchTerm();
-    const post = sharedSearch ? preferredSearchResult(sharedSearch) : null;
-    if (post) await openViewer(post.id);
-  } catch (error) {
-    console.error(error);
-    if (error.status === 401 || error.status === 403) {
-      setBoardVisibility(false);
-    } else {
-      showConnectionRecoveryGate();
-    }
-  }
+  void startup.then(() => initExternalSearch());
 }
 
 void start();
@@ -1797,16 +1851,34 @@ function renderCalendar() {
   const active = selectedCategory === '캘린더';
   $('#calendarPanel').hidden = !active;
   $('#postsPanel').hidden = active;
-  const sorted = [...calendarEvents].sort((a, b) => a.event_date.localeCompare(b.event_date) || a.id.localeCompare(b.id));
-  const urgent = sorted.filter(event => { const days = daysUntil(event.event_date); return days >= 0 && days <= 3; });
+
+  const today = koreaToday();
+  const sorted = [...calendarEvents]
+    .sort((a, b) => a.event_date.localeCompare(b.event_date) || a.id.localeCompare(b.id))
+    .map((event) => {
+      const days = daysUntil(event.event_date, today);
+      const homeDays = calendarWindowDays(event, 'home_display_days');
+      return { event, days, homeDays, urgent: days >= 0 && days <= homeDays };
+    });
   const banner = $('#urgentEvents');
+  const urgent = sorted.filter((item) => item.urgent);
   banner.hidden = !isAllCategoriesSelected() || !urgent.length;
-  banner.innerHTML = urgent.map(event => `<article><strong>${daysUntil(event.event_date) === 0 ? '오늘' : 'D-' + daysUntil(event.event_date)} · ${escapeHtml(event.event_date)}</strong><p>${escapeHtml(event.content)}</p></article>`).join('');
-  const upcoming = sorted.filter(event => daysUntil(event.event_date) >= 0);
-  const past = sorted.filter(event => daysUntil(event.event_date) < 0).reverse();
-  $('#calendarList').innerHTML = [...upcoming, ...past].map(event => {
-    const days = daysUntil(event.event_date);
-    return `<article class="calendar-event ${days < 0 ? 'is-past' : days <= 3 ? 'is-urgent' : ''}"><div><strong>${escapeHtml(event.event_date)} · ${days === 0 ? '오늘' : days > 0 ? 'D-' + days : '지난 일정'}</strong><p>${escapeHtml(event.content)}</p></div><div class="calendar-event-actions"><button type="button" class="button button-ghost" data-edit-event="${escapeHtml(event.id)}">수정</button><button type="button" class="button button-ghost" data-delete-event="${escapeHtml(event.id)}">삭제</button></div></article>`;
+  banner.innerHTML = urgent.map(({ event, days }) => `<article><strong>${days === 0 ? '오늘' : `D-${days}`} · ${escapeHtml(event.event_date)}</strong><p>${escapeHtml(event.content)}</p></article>`).join('');
+
+  const upcoming = sorted.filter(({ days }) => days >= 0);
+  const past = sorted.filter(({ days }) => days < 0).reverse();
+  $('#calendarList').innerHTML = [...upcoming, ...past].map(({ event, days, homeDays, urgent }) => {
+    const dateLabel = days === 0 ? '오늘' : days > 0 ? `D-${days}` : '지난 일정';
+    const notificationDays = calendarWindowDays(event, 'notification_days');
+    return `<article class="calendar-event ${days < 0 ? 'is-past' : urgent ? 'is-urgent' : ''}">
+      <div><strong>${escapeHtml(event.event_date)} · ${dateLabel}</strong><p>${escapeHtml(event.content)}</p>
+        <small class="calendar-event-windows">홈 상단 ${escapeHtml(homeDays)}일 전 · 알림 ${escapeHtml(notificationDays)}일 전</small>
+      </div>
+      <div class="calendar-event-actions">
+        <button type="button" class="button button-ghost" data-edit-event="${escapeHtml(event.id)}">수정</button>
+        <button type="button" class="button button-ghost" data-delete-event="${escapeHtml(event.id)}">삭제</button>
+      </div>
+    </article>`;
   }).join('') || '<p class="empty-state">등록된 일정이 없습니다.</p>';
 }
 
@@ -1842,6 +1914,7 @@ function bindFeatureEvents() {
   resetCalendarForm();
   $('#calendarCancel').addEventListener('click', resetCalendarForm);
   let saving = false;
+  let calendarLoadVersion = 0;
   $('#calendarForm').addEventListener('submit', async event => {
     event.preventDefault();
     if (saving) return;
@@ -1850,7 +1923,14 @@ function bindFeatureEvents() {
     form.inert = true;
     const id = $('#calendarId').value;
     try {
-      const result = await api(id ? '/api/calendar/' + encodeURIComponent(id) : '/api/calendar', { method: id ? 'PATCH' : 'POST', body: JSON.stringify({ event_date: $('#calendarDate').value, content: $('#calendarContent').value }) });
+      const body = {
+        event_date: $('#calendarDate').value,
+        content: $('#calendarContent').value,
+        home_display_days: $('#calendarHomeDays').valueAsNumber,
+        notification_days: $('#calendarNotificationDays').valueAsNumber
+      };
+      const result = await api(id ? '/api/calendar/' + encodeURIComponent(id) : '/api/calendar', { method: id ? 'PATCH' : 'POST', body: JSON.stringify(body) });
+      calendarLoadVersion += 1;
       calendarEvents = [...calendarEvents.filter(item => item.id !== result.event.id), result.event];
       resetCalendarForm();
       renderCalendar();
@@ -1867,6 +1947,8 @@ function bindFeatureEvents() {
       $('#calendarId').value = item.id;
       $('#calendarDate').value = item.event_date;
       $('#calendarContent').value = item.content;
+      $('#calendarHomeDays').value = calendarWindowDays(item, 'home_display_days');
+      $('#calendarNotificationDays').value = calendarWindowDays(item, 'notification_days');
       $('#calendarCancel').hidden = false;
       $('#calendarContent').focus();
     }
@@ -1875,6 +1957,7 @@ function bindFeatureEvents() {
     button.disabled = true;
     try {
       await api('/api/calendar/' + encodeURIComponent(button.dataset.deleteEvent), { method: 'DELETE' });
+      calendarLoadVersion += 1;
       calendarEvents = calendarEvents.filter(item => item.id !== button.dataset.deleteEvent);
       if ($('#calendarId').value === button.dataset.deleteEvent) resetCalendarForm();
       renderCalendar();
@@ -1886,9 +1969,10 @@ function bindFeatureEvents() {
   window.setInterval(() => { if (currentUser) { renderCalendar(); renderCategoryNavigation(); } }, 60000);
   document.addEventListener('visibilitychange', async () => {
     if (document.hidden || !currentUser) return;
+    const loadVersion = ++calendarLoadVersion;
     try {
       const result = await api('/api/calendar');
-      if (!currentUser) return;
+      if (!currentUser || loadVersion !== calendarLoadVersion) return;
       calendarEvents = result.events;
       renderCalendar(); renderCategoryNavigation();
     } catch { /* The API handles expired sessions; keep the last successful data otherwise. */ }

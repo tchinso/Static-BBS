@@ -146,21 +146,28 @@ export function presentPost(post, env) {
 }
 
 export async function ensureAdminProfile(env, user) {
-  const lookup = await supabaseJson(env, restQuery('community_profiles', {
+  const profilePath = restQuery('community_profiles', {
     select: 'id,display_name,role',
     id: `eq.${user.id}`
-  }));
+  });
+  const lookup = await supabaseJson(env, profilePath);
   if (!lookup.response.ok) throw new Error('Profile lookup failed.');
   let profile = firstRow(lookup.data);
   if (!profile) {
     const displayName = cleanText(user.email.split('@')[0], { min: 1, max: 20 }) || '회원';
     const created = await supabaseJson(env, '/rest/v1/community_profiles', {
       method: 'POST',
-      headers: { Prefer: 'return=representation' },
+      headers: { Prefer: 'resolution=ignore-duplicates,return=representation' },
       body: { id: user.id, display_name: displayName, role: 'admin' }
     });
     if (!created.response.ok) throw new Error('Profile creation failed.');
     profile = firstRow(created.data);
+    // Two tabs can initialize the same account at the same time.
+    if (!profile) {
+      const existing = await supabaseJson(env, profilePath);
+      if (!existing.response.ok) throw new Error('Profile lookup failed.');
+      profile = firstRow(existing.data);
+    }
   }
   if (!profile) throw new Error('Profile unavailable.');
   if (profile.role !== 'admin') {

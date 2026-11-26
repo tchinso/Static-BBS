@@ -1120,6 +1120,8 @@ create table public.community_calendar (
   id uuid primary key default gen_random_uuid(),
   event_date date not null check (event_date between date '0001-01-01' and date '9999-12-31'),
   content text not null check (length(btrim(content)) between 1 and 2000),
+  home_display_days smallint not null default 3 constraint community_calendar_home_display_days_valid check (home_display_days between 1 and 7),
+  notification_days smallint not null default 14 constraint community_calendar_notification_days_valid check (notification_days between 3 and 30),
   created_at timestamptz not null default now()
 );
 create index community_calendar_date_id_idx on public.community_calendar(event_date, id);

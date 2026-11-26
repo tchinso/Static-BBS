@@ -348,10 +348,12 @@ a { color: inherit; text-decoration: none; }
 .urgent-events p, .calendar-event p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; }
 .calendar-panel { padding: 24px; }
 .calendar-form { display: grid; gap: 12px; margin: 20px 0; }
+.calendar-windows { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: 12px; }
 .calendar-form label, .external-search-form label, .external-attachment-fields label { display: grid; gap: 6px; }
 .calendar-form input, .calendar-form textarea, .external-search-form input, .external-search-form select { width: 100%; min-width: 0; padding: 10px; border: 1px solid #d9deea; border-radius: 8px; background: white; font: inherit; color: inherit; }
 .calendar-event { display: flex; justify-content: space-between; gap: 16px; padding: 16px 0; border-top: 1px solid #e5e7ec; }
 .calendar-event > div:first-child { min-width: 0; }
+.calendar-event-windows { display: block; margin-top: 8px; color: var(--muted); }
 .calendar-event-actions { display: flex; align-items: start; flex-shrink: 0; gap: 6px; }
 .calendar-event.is-past { color: #777; }
 .calendar-event.is-urgent strong { color: #c82742; }

@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
-function board() {
+function board(features = {}) {
   const elements = new Map();
   const document = {
     querySelector(selector) {
@@ -14,7 +14,7 @@ function board() {
       return elements.get(selector);
     }
   };
-  const context = vm.createContext({ window: {}, document, localStorage: { getItem: () => null }, URL, daysUntil: (date) => Math.round((Date.parse(date) - Date.parse('2026-11-01')) / 86400000), MAX_IMAGES:10, objectKey:(value)=>value });
+  const context = vm.createContext({ window: {}, document, localStorage: { getItem: () => null }, URL, MAX_IMAGES:10, objectKey:(value)=>value, ...features });
   const source = readFileSync(require.resolve('../app.js'), 'utf8').replace(/^import .*;$/gm, '').replace('void start();', '');
   vm.runInContext(source, context);
   return { run: (code) => vm.runInContext(code, context), elements };
@@ -71,8 +71,9 @@ test('star category markup escapes category names', () => {
 });
 
 
-test('calendar shows only upcoming deadlines at exact 3/14-day boundaries and escapes content', () => {
-  const { run, elements } = board();
+test('calendar uses inclusive default and per-event windows and escapes content', async () => {
+  const { calendarWindowDays, daysUntil } = await import('../shared/features.js');
+  const { run, elements } = board({ calendarWindowDays, daysUntil, koreaToday: () => '2026-11-01' });
   run(`calendarEvents = [
     {id:'past',event_date:'2026-10-31',content:'past'},
     {id:'today',event_date:'2026-11-01',content:'<img src=x onerror=alert(1)>'},
@@ -94,4 +95,16 @@ test('calendar shows only upcoming deadlines at exact 3/14-day boundaries and es
   assert.match(elements.get('#categoryNav').innerHTML, /calendar-dot/);
   run(`calendarEvents = [{id:'future',event_date:'2026-11-16',content:'future'}]; renderCategoryNavigation();`);
   assert.doesNotMatch(elements.get('#categoryNav').innerHTML, /calendar-dot/);
+  run(`selectedCategory = '전체글'; calendarEvents = [
+    {id:'short',event_date:'2026-11-03',content:'short',home_display_days:1,notification_days:3},
+    {id:'exact',event_date:'2026-11-08',content:'exact',home_display_days:7,notification_days:30},
+    {id:'outside',event_date:'2026-11-09',content:'outside',home_display_days:7,notification_days:30}
+  ]; renderCalendar();`);
+  assert.match(elements.get('#urgentEvents').innerHTML, /exact/);
+  assert.doesNotMatch(elements.get('#urgentEvents').innerHTML, /short|outside/);
+  assert.match(elements.get('#calendarList').innerHTML, /홈 상단 7일 전 · 알림 30일 전/);
+  for (const [date, days, expected] of [['2026-11-04', 3, true], ['2026-11-05', 3, false], ['2026-12-01', 30, true], ['2026-12-02', 30, false], ['2026-10-31', 30, false]]) {
+    run(`calendarEvents = [{id:'notice',event_date:'${date}',content:'notice',notification_days:${days}}]; renderCategoryNavigation();`);
+    assert.equal(elements.get('#categoryNav').innerHTML.includes('calendar-dot'), expected, date);
+  }
 });

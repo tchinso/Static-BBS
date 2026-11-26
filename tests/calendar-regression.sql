@@ -20,6 +20,26 @@ end;
 end $$;
 reset role;
 set local role service_role;
-insert into public.community_calendar(event_date,content) values ('2026-11-01','QA rollback');
-select count(*) as fixture_count from public.community_calendar where content='QA rollback';
+do $$
+declare
+  fixture public.community_calendar;
+begin
+  insert into public.community_calendar(event_date, content)
+    values ('2026-11-01', 'QA rollback') returning * into fixture;
+  if fixture.home_display_days <> 3 or fixture.notification_days <> 14 then
+    raise exception 'unexpected default display windows';
+  end if;
+  update public.community_calendar set home_display_days = 1, notification_days = 3 where id = fixture.id;
+  update public.community_calendar set home_display_days = 7, notification_days = 30 where id = fixture.id;
+  begin
+    update public.community_calendar set home_display_days = 8 where id = fixture.id;
+    raise exception 'invalid home display days accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    update public.community_calendar set notification_days = 2 where id = fixture.id;
+    raise exception 'invalid notification days accepted';
+  exception when check_violation then null;
+  end;
+end $$;
 rollback;

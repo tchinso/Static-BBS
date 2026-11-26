@@ -24,8 +24,12 @@ export function badRequest(message = '요청 내용을 확인해주세요.') {
   return apiError(400, message);
 }
 
-export function serverError() {
-  return apiError(500, '서버에서 요청을 처리하지 못했습니다. 잠시 후 다시 시도해주세요.');
+export function serverError(extraHeaders = undefined) {
+  return json({ error: '서버에서 요청을 처리하지 못했습니다. 잠시 후 다시 시도해주세요.' }, 500, extraHeaders);
+}
+
+export function authUnavailable() {
+  return apiError(503, '로그인 상태를 확인하는 데 시간이 걸리고 있습니다. 잠시 후 다시 시도해주세요.');
 }
 
 export function methodNotAllowed() {

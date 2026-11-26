@@ -1,6 +1,7 @@
-import { badRequest, crossSiteRequest, isSameOriginRequest, json, readJson, serverError } from '../../_lib/http.js';
+import { authUnavailable, badRequest, crossSiteRequest, isSameOriginRequest, json, readJson, serverError } from '../../_lib/http.js';
 import { createBoardBootstrap } from '../../_lib/bootstrap.js';
 import { establishSession } from '../../_lib/session.js';
+import { AuthServiceUnavailable } from '../../_lib/supabase.js';
 
 // Supabase places tokens after # in the redirect URL. Fragments never reach a
 // server, so the small client callback bridge POSTs them here and immediately
@@ -45,7 +46,7 @@ export async function onRequestPost(context) {
       persistent: established.session.persistent,
       bootstrap
     }, 200, headers);
-  } catch {
-    return serverError();
+  } catch (error) {
+    return error instanceof AuthServiceUnavailable ? authUnavailable() : serverError();
   }
 }

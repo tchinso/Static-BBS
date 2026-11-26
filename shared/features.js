@@ -19,6 +19,15 @@ export function validCalendarDate(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= '0001-01-01' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
 }
 
+export const CALENDAR_WINDOWS = {
+  home_display_days: { min: 1, max: 7, defaultDays: 3, label: '홈 상단 표시' },
+  notification_days: { min: 3, max: 30, defaultDays: 14, label: '캘린더 알림' }
+};
+
+export function calendarWindowDays(event, field) {
+  return event[field] ?? CALENDAR_WINDOWS[field].defaultDays;
+}
+
 export function koreaToday(now = new Date()) {
   return new Date(now.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }

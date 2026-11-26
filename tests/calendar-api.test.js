@@ -41,8 +41,32 @@ test('calendar validates dates and contents and scopes edits/deletes to an id', 
   assert.deepEqual(JSON.parse(calls[0].body), { event_date: '2026-11-04', content: '일정' });
   assert.equal((await onRequestPatch(await context('PATCH', { event_date: '2026-11-05', content: '수정' }))).status, 200);
   assert.equal(new URL(calls[1].url).searchParams.get('id'), `eq.${id}`);
+  assert.deepEqual(JSON.parse(calls[1].body), { event_date: '2026-11-05', content: '수정' });
   assert.equal((await onRequestDelete(await context('DELETE'))).status, 200);
   assert.equal(new URL(calls[2].url).searchParams.get('id'), `eq.${id}`);
   mockFetch([]);
   assert.equal((await onRequestDelete(await context('DELETE'))).status, 404);
+});
+
+test('calendar reads and stores each display window and rejects invalid values', async () => {
+  const base = { event_date: '2026-11-04', content: '일정' };
+  const event = { ...base, id, home_display_days: 7, notification_days: 30 };
+  const calls = mockFetch([event]);
+  for (const [method, handler] of [['POST', onRequestPost], ['PATCH', onRequestPatch]]) {
+    for (const windows of [{ home_display_days: 0 }, { home_display_days: 8 }, { home_display_days: 1.5 }, { notification_days: 2 }, { notification_days: 31 }, { notification_days: '3' }, { notification_days: null }]) {
+      assert.equal((await handler(await context(method, { ...base, ...windows }))).status, 400);
+    }
+  }
+  assert.equal(calls.length, 0);
+
+  const created = await onRequestPost(await context('POST', event));
+  assert.equal(created.status, 201);
+  assert.deepEqual(await created.json(), { event });
+  assert.deepEqual(JSON.parse(calls[0].body), { ...base, home_display_days: 7, notification_days: 30 });
+  const changed = { ...base, home_display_days: 1, notification_days: 3 };
+  assert.equal((await onRequestPatch(await context('PATCH', changed))).status, 200);
+  assert.deepEqual(JSON.parse(calls[1].body), changed);
+  const listed = await onRequestGet(await context('GET'));
+  assert.deepEqual(await listed.json(), { events: [event] });
+  assert.equal(new URL(calls[2].url).searchParams.get('select'), 'id,event_date,content,home_display_days,notification_days');
 });

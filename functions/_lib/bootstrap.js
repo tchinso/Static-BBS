@@ -3,16 +3,19 @@ import { ensureAdminProfile, listPosts } from './board.js';
 import { listCategories, withCategoryPostCounts } from './categories.js';
 import { listShortcuts } from './shortcuts.js';
 
-export async function createBoardBootstrap(env, user) {
-  // All reads are independent once the caller has authenticated the user.
-  // Running them together removes multiple Supabase round trips from the
-  // critical path of every app launch.
-  const [profile, posts, categories, shortcuts, events] = await Promise.all([
-    ensureAdminProfile(env, user),
+export function loadBoardContent(env) {
+  return Promise.all([
     listPosts(env),
     listCategories(env),
     listShortcuts(env),
     listCalendar(env)
+  ]);
+}
+
+export async function createBoardBootstrap(env, user, board = loadBoardContent(env)) {
+  const [profile, [posts, categories, shortcuts, events]] = await Promise.all([
+    ensureAdminProfile(env, user),
+    board
   ]);
 
   return {

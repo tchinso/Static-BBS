@@ -10,7 +10,8 @@
   <link rel="apple-touch-icon" href="/icons/app-icon.svg">
   <title>냥캣메모</title>
   <link rel="icon" href="/icons/app-icon.svg" type="image/svg+xml">
-  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="modulepreload" href="/app.js">
+  <link rel="modulepreload" href="/client/startup.js">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -22,7 +23,7 @@
       <p class="auth-gate-progress" id="authGateProgress" role="status"><span class="auth-spinner" aria-hidden="true"></span><span id="authGateProgressLabel">잠시만 기다려주세요.</span></p>
       <div class="auth-gate-actions">
         <button class="button button-primary" id="gateLoginButton" type="button" hidden>이메일로 로그인</button>
-        <button class="button button-ghost" id="authGateRetryButton" type="button" hidden>새로고침</button>
+        <button class="button button-ghost" id="authGateRetryButton" type="button" hidden>다시 시도</button>
       </div>
     </div>
   </section>
@@ -31,7 +32,7 @@
   <header class="site-header">
     <div class="header-inner">
       <a class="brand" href="#" aria-label="홈으로">
-        <img class="brand-logo" src="https://i.imgur.com/N3u272S.png" alt="">
+        <img class="brand-logo" src="https://i.imgur.com/N3u272S.png" loading="lazy" alt="">
         <strong>냥캣메모</strong>
       </a>
       <div class="header-actions">
@@ -55,11 +56,15 @@
     <section class="content">
 
       <section id="calendarPanel" class="board-card calendar-panel" hidden>
-        <h2>캘린더</h2><p>한국 날짜 기준 · 14일 이내 알림 · 3일 이내 홈 상단 표시</p>
+        <h2>캘린더</h2><p>한국 날짜 기준</p>
         <form id="calendarForm" class="calendar-form">
           <input id="calendarId" type="hidden">
           <label>날짜<input id="calendarDate" type="date" min="0001-01-01" max="9999-12-31" required></label>
           <label>내용<textarea id="calendarContent" maxlength="2000" rows="3" required></textarea></label>
+          <div class="calendar-windows">
+            <label>홈 상단 표시 (1~7일 전)<input id="calendarHomeDays" type="number" min="1" max="7" value="3" required></label>
+            <label>캘린더 알림 (3~30일 전)<input id="calendarNotificationDays" type="number" min="3" max="30" value="14" required></label>
+          </div>
           <div><button class="button button-primary" type="submit">일정 저장</button> <button id="calendarCancel" class="button button-ghost" type="button" hidden>수정 취소</button></div>
         </form><p id="calendarMessage" role="status"></p><div id="calendarList"></div>
       </section>

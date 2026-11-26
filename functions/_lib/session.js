@@ -118,20 +118,16 @@ export async function sessionCookie(env, session) {
 }
 
 function safeExpiresAt(accessToken, expiresIn) {
-  const parsed = Number(expiresIn);
-  if (Number.isFinite(parsed) && parsed >= 30 && parsed <= 60 * 60 * 24 * 31) {
-    return Date.now() + parsed * 1000;
-  }
-  // Supabase access tokens normally contain exp. This is used only to decide
-  // when to refresh; the token is still verified by /auth/v1/user below.
+  // Supabase has verified the token. Use its absolute expiry even if an older
+  // magic link still reports the original lifetime in expires_in.
   try {
     const payload = accessToken.split('.')[1];
     const bytes = base64UrlDecode(payload);
     const decoded = bytes ? JSON.parse(decoder.decode(bytes)) : null;
-    if (typeof decoded?.exp === 'number' && decoded.exp * 1000 > Date.now()) return decoded.exp * 1000;
-  } catch {
-    // Use a short expiry and let the refresh path verify the session.
-  }
+    if (Number.isFinite(decoded?.exp)) return decoded.exp * 1000;
+  } catch { /* Fall back to the supplied lifetime. */ }
+  const parsed = Number(expiresIn);
+  if (Number.isFinite(parsed) && parsed >= 30 && parsed <= 60 * 60 * 24 * 31) return Date.now() + parsed * 1000;
   return Date.now() + 30 * 60 * 1000;
 }
 
@@ -152,51 +148,33 @@ export async function establishSession(env, values) {
   return { session, user, cookie: await sessionCookie(env, session) };
 }
 
-async function refreshStoredSession(env, session) {
-  const refreshed = await refreshAuthSession(env, session.refreshToken);
-  if (!refreshed) return null;
-  return {
-    version: 1,
-    accessToken: refreshed.access_token,
-    refreshToken: refreshed.refresh_token,
-    expiresAt: safeExpiresAt(refreshed.access_token, refreshed.expires_in),
-    persistent: session.persistent
-  };
-}
+// Every API request verifies the session with Supabase and the current allowlist.
+export async function getAuthorizedSession(request, env, { onFreshSession } = {}) {
+  let session = await openSession(env, readCookie(request, SESSION_COOKIE));
+  if (!session) return { ok: false };
 
-// A session is checked against Supabase on every API request. The encrypted,
-// signed cookie is merely server-side token storage; it is never returned to JS.
-export async function getAuthorizedSession(request, env) {
-  let session;
-  try {
-    session = await openSession(env, readCookie(request, SESSION_COOKIE));
-  } catch {
-    return { ok: false, clearCookie: clearSessionCookie() };
-  }
-  if (!session) return { ok: false, clearCookie: clearSessionCookie() };
-
-  let changed = false;
-  if (session.expiresAt <= Date.now() + 60_000) {
-    session = await refreshStoredSession(env, session);
-    if (!session) return { ok: false, clearCookie: clearSessionCookie() };
-    changed = true;
-  }
-
-  let user = await getAuthUser(env, session.accessToken);
-  // If a token was revoked or its expiry estimate was stale, one refresh retry
-  // avoids logging the user out merely because the browser was idle.
-  if (!user && !changed) {
-    session = await refreshStoredSession(env, session);
-    if (!session) return { ok: false, clearCookie: clearSessionCookie() };
-    changed = true;
+  let user;
+  let setCookie = null;
+  if (session.expiresAt > Date.now() + 60_000) {
+    onFreshSession?.();
     user = await getAuthUser(env, session.accessToken);
   }
-  if (!user || !isAllowedEmail(env, user.email)) return { ok: false, clearCookie: clearSessionCookie() };
-
-  return {
-    ok: true,
-    session,
-    user,
-    setCookie: changed ? await sessionCookie(env, session) : null
-  };
+  if (!user) {
+    const refreshed = await refreshAuthSession(env, session.refreshToken);
+    if (!refreshed) return { ok: false };
+    session = {
+      ...session,
+      accessToken: refreshed.access_token,
+      refreshToken: refreshed.refresh_token,
+      expiresAt: safeExpiresAt(refreshed.access_token, refreshed.expires_in)
+    };
+    user = refreshed.user || await getAuthUser(env, session.accessToken);
+    if (!user || !isAllowedEmail(env, user.email)) return { ok: false };
+    setCookie = await sessionCookie(env, session);
+  } else if (!isAllowedEmail(env, user.email)) {
+    return { ok: false };
+  }
+  // An older request can finish after a successful sign-in in another tab.
+  // Only explicit logout should send a deletion cookie.
+  return { ok: true, session, user, setCookie };
 }
