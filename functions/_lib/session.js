@@ -1,4 +1,5 @@
 import { getAuthUser, isAllowedEmail, isSupabaseRefreshToken, refreshAuthSession } from './supabase.js';
+import { isUuid } from '../../shared/validation.js';
 
 export const SESSION_COOKIE = '__Host-nkmm_session';
 export const PERSISTENT_SESSION_SECONDS = 60 * 60 * 24 * 400;
@@ -117,15 +118,18 @@ export async function sessionCookie(env, session) {
   return attributes.join('; ');
 }
 
+function tokenClaims(accessToken) {
+  try {
+    const bytes = base64UrlDecode(accessToken.split('.')[1]);
+    return bytes ? JSON.parse(decoder.decode(bytes)) : null;
+  } catch { return null; }
+}
+
 function safeExpiresAt(accessToken, expiresIn) {
   // Supabase has verified the token. Use its absolute expiry even if an older
   // magic link still reports the original lifetime in expires_in.
-  try {
-    const payload = accessToken.split('.')[1];
-    const bytes = base64UrlDecode(payload);
-    const decoded = bytes ? JSON.parse(decoder.decode(bytes)) : null;
-    if (Number.isFinite(decoded?.exp)) return decoded.exp * 1000;
-  } catch { /* Fall back to the supplied lifetime. */ }
+  const expiry = tokenClaims(accessToken)?.exp;
+  if (Number.isFinite(expiry)) return expiry * 1000;
   const parsed = Number(expiresIn);
   if (Number.isFinite(parsed) && parsed >= 30 && parsed <= 60 * 60 * 24 * 31) return Date.now() + parsed * 1000;
   return Date.now() + 30 * 60 * 1000;
@@ -156,8 +160,12 @@ export async function getAuthorizedSession(request, env, { onFreshSession } = {}
   let user;
   let setCookie = null;
   if (session.expiresAt > Date.now() + 60_000) {
-    onFreshSession?.();
-    user = await getAuthUser(env, session.accessToken);
+    const lookup = getAuthUser(env, session.accessToken);
+    if (onFreshSession) {
+      const subject = tokenClaims(session.accessToken)?.sub;
+      onFreshSession(isUuid(subject) ? subject : null);
+    }
+    user = await lookup;
   }
   if (!user) {
     const refreshed = await refreshAuthSession(env, session.refreshToken);

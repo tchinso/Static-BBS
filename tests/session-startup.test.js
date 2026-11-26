@@ -25,10 +25,10 @@ const rotatedTokens = {
   expires_in: 3600
 };
 
-async function loginCookie(expiresAt = Date.now() + 3_600_000) {
+async function loginCookie(expiresAt = Date.now() + 3_600_000, accessToken = 'test-access-token-valid-length') {
   const cookie = await sessionCookie(env, {
     version: 1,
-    accessToken: 'test-access-token-valid-length',
+    accessToken,
     refreshToken: 'test-refresh-token-valid-length',
     expiresAt,
     persistent: true
@@ -54,13 +54,27 @@ function mockSupabase({
 } = {}) {
   const calls = [];
   globalThis.fetch = async (url, options) => {
-    const path = new URL(url).pathname;
+    const { pathname: path, searchParams } = new URL(url);
     calls.push({ path, method: options.method });
     if (path === '/auth/v1/user') return lookup();
     if (path === '/auth/v1/token') return refresh();
-    return read(path, options);
+    return read(path, options, searchParams);
   };
   return calls;
+}
+
+async function waitForPrefetch(readStarted, label) {
+  let timer;
+  try {
+    await Promise.race([
+      readStarted,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} waited for authentication`)), 1000);
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 test('passive requests without a usable cookie do not clear a session in another tab', async () => {
@@ -89,16 +103,9 @@ test('startup prefetches board reads during verification without releasing them 
   });
   const ctx = context('/api/bootstrap', await loginCookie());
   const pending = bootstrap(ctx);
-  let timer;
   try {
-    await Promise.race([
-      boardReadStarted.promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Board reads waited for authentication')), 1000);
-      })
-    ]);
+    await waitForPrefetch(boardReadStarted.promise, 'Board reads');
   } finally {
-    clearTimeout(timer);
     lookup.resolve(Response.json({ ...user, email: 'removed@example.test' }));
   }
   const response = await pending;
@@ -107,6 +114,49 @@ test('startup prefetches board reads during verification without releasing them 
   assert.doesNotMatch(await response.text(), /private/);
   assert.equal(calls.some(({ method }) => method !== 'GET'), false);
   assert.deepEqual(ctx.jobs, []);
+});
+
+test('startup prefetches the JWT subject profile but only uses it for the verified user', async () => {
+  const otherId = '22222222-2222-4222-8222-222222222222';
+  const otherProfile = { id: otherId, display_name: '다른 회원', role: 'member' };
+  for (const subject of [user.id, otherId]) {
+    const lookupStarted = Promise.withResolvers();
+    const lookup = Promise.withResolvers();
+    const profileReadStarted = Promise.withResolvers();
+    const profileReads = [];
+    mockSupabase({
+      lookup() {
+        lookupStarted.resolve();
+        return lookup.promise;
+      },
+      read(path, options, searchParams) {
+        if (path !== '/rest/v1/community_profiles') return Response.json([]);
+        const id = searchParams.get('id');
+        profileReads.push({ id, method: options.method });
+        profileReadStarted.resolve();
+        return Response.json([id === `eq.${user.id}` ? profile : otherProfile]);
+      }
+    });
+    const expiresAt = Date.now() + 3_600_000;
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+    const claims = Buffer.from(JSON.stringify({ sub: subject, exp: Math.floor(expiresAt / 1000) })).toString('base64url');
+    const token = `${header}.${claims}.dGVzdC1zaWduYXR1cmU`;
+    const ctx = context('/api/bootstrap', await loginCookie(expiresAt, token));
+    const pending = bootstrap(ctx);
+    const speculativeRead = { id: `eq.${subject}`, method: 'GET' };
+    try {
+      await waitForPrefetch(Promise.all([lookupStarted.promise, profileReadStarted.promise]), 'Profile lookup');
+      assert.deepEqual(profileReads, [speculativeRead]);
+    } finally {
+      lookup.resolve(Response.json(user));
+    }
+    const response = await pending;
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).profile, profile);
+    const expectedReads = subject === user.id ? [speculativeRead] : [speculativeRead, { id: `eq.${user.id}`, method: 'GET' }];
+    assert.deepEqual(profileReads, expectedReads);
+    await Promise.all(ctx.jobs);
+  }
 });
 
 test('transport, rate limit, and upstream failures preserve both fresh and expired cookies', async () => {

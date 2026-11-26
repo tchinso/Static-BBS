@@ -12,9 +12,9 @@ export function loadBoardContent(env) {
   ]);
 }
 
-export async function createBoardBootstrap(env, user, board = loadBoardContent(env)) {
+export async function createBoardBootstrap(env, user, { board = loadBoardContent(env), profile: profileLookup } = {}) {
   const [profile, [posts, categories, shortcuts, events]] = await Promise.all([
-    ensureAdminProfile(env, user),
+    ensureAdminProfile(env, user, profileLookup),
     board
   ]);
 
